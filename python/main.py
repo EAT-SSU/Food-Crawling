@@ -18,11 +18,12 @@ app = FastAPI()
 def getTodayMenu(restaurantType:int, day:Optional[int]):
     webpage=urllib.request.urlopen(f'http://m.soongguri.com/m_req/m_menu.php?rcd={restaurantType}&sdt={day}')
     soup:BeautifulSoup = BeautifulSoup(webpage, 'html.parser')
+    
     if (restaurantType==1): #학생식당
-        pass
+        return(soup.find(text=re.compile("^뚝")).strip())
         #일단 학생식당 부분은 pass
 
-    if (restaurantType==2): #도담식당
+    elif (restaurantType==2): #도담식당
         result=soup.find_all(text=re.compile("#.*"))
         for index,item in enumerate(result):
             result[index]=item.strip().lstrip("#")
