@@ -12,7 +12,7 @@ soup:BeautifulSoup = BeautifulSoup(webpage, 'html.parser')
 # print(soup.text)
 a=soup.find(text=re.compile("^뚝"))
 
-        return(soup.find(text=re.compile("^뚝")).strip())
+#return(soup.find(text=re.compile("^뚝")).strip())
 
 
 print(a.text)
