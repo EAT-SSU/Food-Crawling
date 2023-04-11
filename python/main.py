@@ -52,9 +52,16 @@ def getTodayMenu(restaurantType:int, date:str) -> Union[str, Dict[str, List[str]
         result=soup.find_all("tr")
         for i in result:
             if (i.td.string=="중식1"):
-                json["중식"]=[ k.strip().lstrip("#") for k in i.find_all(text=re.compile("#.*"))]
+                # json["중식"]=[ k.strip().lstrip("#") for k in i.find_all(text=re.compile("#.*"))]
+                print(i.find_all('font', {'color': '#ff9900'}))
+                json["중식"]=[k.text for k in i.find_all('font', {'color': '#ff9900'})]
+            elif (i.td.string=="중식4"):
+                pass
+
             elif(i.td.string=="석식1"):
-                json["석식"]=[ k.strip().lstrip("#") for k in i.find_all(text=re.compile("#.*"))]
+                # json["석식"]=[ k.strip().lstrip("#") for k in i.find_all(text=re.compile("#.*"))]
+                json["석식"]=[k.text for k in i.find_all('font', {'color': '#ff9900'})]
+
         return json
     elif (restaurantType==3): #기숙사 식당
         pass
