@@ -45,22 +45,29 @@ def getTodayMenu(restaurantType:int, date:str) -> Union[str, Dict[str, List[str]
         return "주말은 쉽니다"
     
     if (restaurantType==1): #학생식당
-        return(soup.find(text=re.compile("^뚝")).strip())
+        json={}
+        json["중식1"]=soup.find(text=re.compile("^뚝")).strip()
+        json["식당"]="학생식당"
+        json["날짜"]=date
+        return(json)
         #일단 학생식당 부분은 pass
     elif (restaurantType==2): #도담식당
-        json={"중식":"","석식":""}
+        json={}
+        json["식당"]="도담식당"
+        json["날짜"]=date
         result=soup.find_all("tr")
         for i in result:
             if (i.td.string=="중식1"):
-                # json["중식"]=[ k.strip().lstrip("#") for k in i.find_all(text=re.compile("#.*"))]
-                print(i.find_all('font', {'color': '#ff9900'}))
-                json["중식"]=[k.text for k in i.find_all('font', {'color': '#ff9900'})]
+                # json["중식"]=[ k.strip().lstrip("#") for k in i.find_all(text=re.compile("#.*"))] # 2022년도 규칙 #뒤에 메뉴
+                json["중식1"]=[k.next_element.text for k in i.find_all(text=re.compile("★.*"))] #2023년도 규칙 ★다음 요소에 메뉴
+                # json["중식"]=[k.text for k in i.find_all('font', {'color': '#ff9900'})] #2023년도 규칙 폰트 컬러가 #ff9900
             elif (i.td.string=="중식4"):
-                pass
+                json["중식4"]=[k.next_element.text for k in i.find_all(text=re.compile("★.*"))]
+
 
             elif(i.td.string=="석식1"):
                 # json["석식"]=[ k.strip().lstrip("#") for k in i.find_all(text=re.compile("#.*"))]
-                json["석식"]=[k.text for k in i.find_all('font', {'color': '#ff9900'})]
+                json["석식1"]=[k.next_element.text for k in i.find_all(text=re.compile("★.*"))]
 
         return json
     elif (restaurantType==3): #기숙사 식당
