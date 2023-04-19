@@ -13,7 +13,7 @@ COPY food-crawling/python/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # copy the application files
-COPY food-crawling .
+COPY food-crawling /app/food-crawling
 
 # expose port
 EXPOSE 8000
