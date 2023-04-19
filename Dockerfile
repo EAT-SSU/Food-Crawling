@@ -7,13 +7,12 @@ RUN apt-get update && apt-get install -y python3-pip
 WORKDIR /app
 
 # copy the requirements file
-COPY food-crawling/python/requirements.txt .
+COPY . .
 
 # install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # copy the application files
-COPY food-crawling /app/food-crawling
 
 # expose port
 EXPOSE 8000
