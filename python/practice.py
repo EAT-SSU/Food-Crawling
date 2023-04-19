@@ -38,9 +38,5 @@ print(a)
 #             a[day]["중.석식"]=value.split("\r\n")
 
 
-        
-        
-df=pd.DataFrame(table)
-
 
 
