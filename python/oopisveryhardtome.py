@@ -64,9 +64,3 @@ class Dodam_or_School_Cafeteria:
     def __str__(self) -> str:
         return f"{self.menu}"
 
-
-a=Dodam_or_School_Cafeteria("2","20230501")
-
-a.get_menu()
-
-print(a)
