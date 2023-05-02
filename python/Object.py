@@ -1,10 +1,12 @@
 import urllib.request
+import requests
 from bs4 import BeautifulSoup
 import re
 from enum import Enum
 import pandas as pd
 from html_table_parser import parser_functions as parser
 from datetime import date,datetime
+from constant import SOONGGURI_HEADERS
 
 class Restaurant(Enum):
     DODAM=1
@@ -22,8 +24,9 @@ class Dodam_or_School_Cafeteria:
         self.soup=None
     
     def todaysoup(self): # 1이면 학생식당, 2이면 도담식당
-        webpage=urllib.request.urlopen(f'http://m.soongguri.com/m_req/m_menu.php?rcd={self.restaurant_type}&sdt={self.date}')
-        soup:BeautifulSoup = BeautifulSoup(webpage, 'html.parser')
+        # webpage=urllib.request.urlopen(f'http://m.soongguri.com/m_req/m_menu.php?rcd={self.restaurant_type}&sdt={self.date}')
+        webpage=requests.get(f'http://m.soongguri.com/m_req/m_menu.php?rcd={self.restaurant_type}&sdt={self.date}',headers=SOONGGURI_HEADERS)
+        soup:BeautifulSoup = BeautifulSoup(webpage.content, 'html.parser')
 
         self.soup=soup
 
@@ -89,8 +92,9 @@ class Dodam_or_School_Cafeteria:
 class Dormitory:
     def __init__(self,date) -> None:
         date = datetime.strptime(date,'%Y%m%d')
-        webpage=urllib.request.urlopen(f'https://ssudorm.ssu.ac.kr:444/SShostel/mall_main.php?viewform=B0001_foodboard_list&gyear={date.year}&gmonth={date.month}&gday={date.day}')
-        self.soup:BeautifulSoup = BeautifulSoup(webpage, 'html.parser')
+        # webpage=urllib.request.urlopen(f'https://ssudorm.ssu.ac.kr:444/SShostel/mall_main.php?viewform=B0001_foodboard_list&gyear={date.year}&gmonth={date.month}&gday={date.day}')
+        webpage=requests.get(f'https://ssudorm.ssu.ac.kr:444/SShostel/mall_main.php?viewform=B0001_foodboard_list&gyear={date.year}&gmonth={date.month}&gday={date.day}')
+        self.soup:BeautifulSoup = BeautifulSoup(webpage.content, 'html.parser')
         self.table=None
         self.dict=dict()
 
