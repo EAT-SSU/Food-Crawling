@@ -4,6 +4,7 @@ import re
 from enum import Enum
 import pandas as pd
 from html_table_parser import parser_functions as parser
+from datetime import date,datetime
 
 class Restaurant(Enum):
     DODAM=1
@@ -14,7 +15,7 @@ class Restaurant(Enum):
     THE_KITCHEN=6
 
 class Dodam_or_School_Cafeteria:
-    def __init__(self,restaurant_type:Restaurant,date) -> None:
+    def __init__(self,restaurant_type,date) -> None:
         self.restaurant_type=restaurant_type
         self.date=date
         self.menu=None
@@ -86,10 +87,12 @@ class Dodam_or_School_Cafeteria:
         return f"{self.menu}"
 
 class Dormitory:
-    def __init__(self,year,month,day) -> None:
-        webpage=urllib.request.urlopen(f'https://ssudorm.ssu.ac.kr:444/SShostel/mall_main.php?viewform=B0001_foodboard_list&gyear={year}&gmonth={month}&gday={day}')
+    def __init__(self,date) -> None:
+        date = datetime.strptime(date,'%Y%m%d')
+        webpage=urllib.request.urlopen(f'https://ssudorm.ssu.ac.kr:444/SShostel/mall_main.php?viewform=B0001_foodboard_list&gyear={date.year}&gmonth={date.month}&gday={date.day}')
         self.soup:BeautifulSoup = BeautifulSoup(webpage, 'html.parser')
         self.table=None
+        self.dict=dict()
 
     def refine_table(self):
         table_tag=self.soup.find("table","boxstyle02")
@@ -108,9 +111,14 @@ class Dormitory:
 
     def get_table(self):
         for index,rows in self.table.iterrows():
+            self.dict[index]=dict()
             for col_name in self.table.columns:
-                # print(index, col_name, rows[col_name])
-                print(f'{index},{col_name},{rows[col_name]}')
+                # print(f'{index},{col_name},{rows[col_name]}')
+                self.dict[index][col_name]=rows[col_name]
+
+    def __str__(self) -> str:
+        return self.dict
+    
 
 
 
