@@ -6,7 +6,8 @@ from Object import Dormitory
 
 # from fastapi.responses import JSONResponse
 # from pydantic import BaseModel
-
+import sys
+sys.path.append("/app/python/")
 
 
 # class SoongsilMenuModel(BaseModel):
