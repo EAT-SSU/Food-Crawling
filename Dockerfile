@@ -12,7 +12,8 @@ COPY . .
 # install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# copy the application files
+# 파이썬 경로 잡아주기
+ENV PYTHONPATH=/app/python
 
 # expose port
 EXPOSE 8000
