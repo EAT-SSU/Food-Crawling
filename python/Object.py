@@ -27,7 +27,7 @@ class Dodam_or_School_Cafeteria:
         # webpage=urllib.request.urlopen(f'http://m.soongguri.com/m_req/m_menu.php?rcd={self.restaurant_type}&sdt={self.date}')
         webpage=requests.get(f'http://m.soongguri.com/m_req/m_menu.php?rcd={self.restaurant_type}&sdt={self.date}',headers=SOONGGURI_HEADERS)
         soup:BeautifulSoup = BeautifulSoup(webpage.content, 'html.parser')
-
+        
         self.soup=soup
 
     def find_all_menu_nm_dict(self) ->dict:
@@ -42,11 +42,23 @@ class Dodam_or_School_Cafeteria:
         return menu_nm_dict
 
 
-    def find_food(self,value):
+    def find_food(self,value) ->list or str:
+        '''
+            value: Beautifulsoup 객체, 하나의 tr 객체이다. 즉 하나의 행 html 객체이다. ex) 중식1 tr 객체, 중식2 tr 객체, 석식1 tr 객체
+            return: 알러지 유발 식품 정보를 담은 문자열 또는 메뉴 정보를 담은 리스트 혹은 문자열
+                    1. 알러지유발식품으로 잘 찾을 시에는 문자열을 리턴하고 parse_allergy로 가서 파싱이 됨
+                    2. 만약 못찾을시 ★으로 시작하는 문자열을 찾고 별을 제거하고 split한 리스트를 바로 final_dict에 할당
+
+            실질적으로 크롤링 로직 수정시 이 함수만 건드리면 됨
+        '''
         elements = value.find(text=lambda text: text and text.startswith("*알러지유발식품:"))
         # iswell_newline=elements.next_element.string.startswith("*원산지")
-        # print(elements)
         # print(elements.next_element,type(elements.next_element))
+
+        if elements is None: #예외 <br> 태그로 인해서 알러지로 실패할 시 ★을 찾는 방식으로 대체
+            menu=value.find_all(text=re.compile("★.*"))
+            menu=[i.lstrip("★") for i in menu]
+            return menu
 
         iswell_newline=elements.next_element.text.startswith("*원산지")
 
@@ -64,8 +76,9 @@ class Dodam_or_School_Cafeteria:
             return menu
 
         menu=elements.replace("*알러지유발식품:","").strip()
-
         return menu
+    
+
 
     def parse_allergy(self,elements):
         
@@ -81,7 +94,11 @@ class Dodam_or_School_Cafeteria:
         final_dict=dict()
         for key,value in menu_nm_dict.items():
             food=self.find_food(value)
-            k=self.parse_allergy(food)
+            print(type(food))
+            if type(food) is str:
+                k=self.parse_allergy(food)
+            elif type(food) is list:
+                k=food
             final_dict[key]=k
         self.menu=final_dict
         return self.menu
