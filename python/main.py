@@ -9,6 +9,18 @@ from Object import Dormitory
 import sys
 sys.path.append("/app/python/")
 
+import sentry_sdk
+
+
+sentry_sdk.init(
+    dsn="https://94230547ab4e4ce483f714b4077f4572@o4505178008190976.ingest.sentry.io/4505178011009024",
+
+    # Set traces_sample_rate to 1.0 to capture 100%
+    # of transactions for performance monitoring.
+    # We recommend adjusting this value in production,
+    traces_sample_rate=1.0,
+)
+
 
 # class SoongsilMenuModel(BaseModel):
 #     date: Union[str,None]= None
@@ -96,6 +108,11 @@ def get_school_cafeteria(date:str):
     todaymenu.refine_table()
     todaymenu.get_table()
     return todaymenu.dict
+
+@app.get("/sentry-debug")
+async def trigger_error():
+    division_by_zero = 1 / 0
+
 
 
 
