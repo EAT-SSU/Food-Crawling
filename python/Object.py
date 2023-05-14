@@ -1,4 +1,3 @@
-import urllib.request
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -6,7 +5,78 @@ from enum import Enum
 import pandas as pd
 from html_table_parser import parser_functions as parser
 from datetime import date,datetime
+from abc import ABC, abstractmethod
+from typing import Optional
+from pydantic import BaseModel
+from constant import SOONGGURI_HEADERS
 
+class Menu(BaseModel):
+    date: str
+    restaurant_type: str
+    menu: dict=dict()
+
+class Restaurant(ABC):
+
+    def __init__(self,date,restaurant_type) -> None:
+        super().__init__()
+        self.date=date
+        self.restaurant_type=restaurant_type
+        self.soup=None
+        self.menu_rows=None
+        self.menu=Menu(date,restaurant_type)
+
+    def __str__(self) -> str:
+        return f"{self.menu}"
+
+    def get_soup(self):
+        webpage=requests.get(f'http://m.soongguri.com/m_req/m_menu.php?rcd={self.restaurant_type}&sdt={self.date}',headers=SOONGGURI_HEADERS)
+        soup:BeautifulSoup = BeautifulSoup(webpage.content, 'html.parser')
+
+        self.soup=soup
+
+    def get_menu_rows(self):
+        tr_list=self.soup.find_all('tr')
+        menu_nm_dict=dict()
+
+        for tr_tag in tr_list: # tr_tag는 tr과 그 하위 태그인 Beautifulsoup 객체
+            td_tag = tr_tag.find('td', {'class': 'menu_nm'})
+            if td_tag:
+                menu_nm_dict[td_tag.text]=tr_tag
+                
+        self.menu_rows=menu_nm_dict
+
+    @abstractmethod
+    def parse_menu(self):
+        pass
+
+    def get_menu(self):
+        self.get_soup()
+        self.get_menu_rows()
+
+        for k,v in self.menu_rows.items():
+            self.parse_menu(k,v)
+
+        return self.menu
+
+class Dodam(Restaurant):
+
+    def __init__(self,date) -> None:
+        super().__init__(restaurant_type=2,date=date)
+    
+    def parse_menu(self):
+        pass
+    
+
+class School_Cafeteria(Restaurant):
+
+    def __init__(self,date) -> None:
+        super().__init__(restaurant_type=1,date=date)
+        self.get_menu()
+    
+    def parse_menu(self):
+        pass
+    
+    
 
 class Dodam_or_School_Cafeteria:
     def __init__(self,restaurant_type,date) -> None:
@@ -72,12 +142,6 @@ class Dodam_or_School_Cafeteria:
             menu=[i.lstrip("★") for i in menu]
             return menu
             
-
-        
-        
-    
-
-
     def parse_allergy(self,elements):
         
         pattern = re.compile(r'\([^)]*\)')
