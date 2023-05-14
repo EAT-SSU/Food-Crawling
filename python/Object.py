@@ -6,15 +6,7 @@ from enum import Enum
 import pandas as pd
 from html_table_parser import parser_functions as parser
 from datetime import date,datetime
-from constant import SOONGGURI_HEADERS
 
-class Restaurant(Enum):
-    DODAM=1
-    DOMITORY=2
-    FOOD_COURT=3
-    SNACK_CORNER=4
-    HAKSIK=5
-    THE_KITCHEN=6
 
 class Dodam_or_School_Cafeteria:
     def __init__(self,restaurant_type,date) -> None:
@@ -51,32 +43,38 @@ class Dodam_or_School_Cafeteria:
 
             실질적으로 크롤링 로직 수정시 이 함수만 건드리면 됨
         '''
-        elements = value.find(text=lambda text: text and text.startswith("*알러지유발식품:"))
-        # iswell_newline=elements.next_element.string.startswith("*원산지")
-        # print(elements.next_element,type(elements.next_element))
 
-        if elements is None: #예외 <br> 태그로 인해서 알러지로 실패할 시 ★을 찾는 방식으로 대체
+        try:
+            elements = value.find(text=lambda text: text and text.startswith("*알러지유발식품:"))
+            # iswell_newline=elements.next_element.string.startswith("*원산지")
+            # print(elements.next_element,type(elements.next_element))
+
+            iswell_newline=elements.next_element.text.startswith("*원산지")
+
+
+            # 예외처리: 현재 크롤링 로직은 *알러지유발식품:~ 이것이 한 Tag 객체에 text로 존재할 것을 가정하나, 만약 한 태그 내에 알러지유발식품에 대한 전체 문자열이 없는 경우(다음 div에 메뉴에 대한 정보가 있는 경우, 아마도 사이트에서 개행을 하면 다른 div로 가는듯) 다음 태그인 원산지가 나올때가 문자열을 접합한다.
+
+            if iswell_newline is False: 
+                menu=str(elements)
+                elements=elements.next_element
+                while iswell_newline is False:
+                    iswell_newline=elements.find_next_sibling("div").text.startswith("*원산지")
+                    menu+=elements.text
+                    elements=elements.find_next_sibling("div")
+                menu=menu.replace("*알러지유발식품:","").strip()
+                return menu
+
+            menu=elements.replace("*알러지유발식품:","").strip()
+            return menu
+        except:
+            # if elements is None: #예외 <br> 태그로 인해서 알러지로 실패할 시 ★을 찾는 방식으로 대체
             menu=value.find_all(text=re.compile("★.*"))
             menu=[i.lstrip("★") for i in menu]
             return menu
+            
 
-        iswell_newline=elements.next_element.text.startswith("*원산지")
-
-
-        # 예외처리: 현재 크롤링 로직은 *알러지유발식품:~ 이것이 한 Tag 객체에 text로 존재할 것을 가정하나, 만약 한 태그 내에 알러지유발식품에 대한 전체 문자열이 없는 경우(다음 div에 메뉴에 대한 정보가 있는 경우, 아마도 사이트에서 개행을 하면 다른 div로 가는듯) 다음 태그인 원산지가 나올때가 문자열을 접합한다.
-
-        if iswell_newline is False: 
-            menu=str(elements)
-            elements=elements.next_element
-            while iswell_newline is False:
-                iswell_newline=elements.find_next_sibling("div").text.startswith("*원산지")
-                menu+=elements.text
-                elements=elements.find_next_sibling("div")
-            menu=menu.replace("*알러지유발식품:","").strip()
-            return menu
-
-        menu=elements.replace("*알러지유발식품:","").strip()
-        return menu
+        
+        
     
 
 
@@ -99,6 +97,7 @@ class Dodam_or_School_Cafeteria:
                 k=self.parse_allergy(food)
             elif type(food) is list:
                 k=food
+            print(k)
             final_dict[key]=k
         self.menu=final_dict
         return self.menu
