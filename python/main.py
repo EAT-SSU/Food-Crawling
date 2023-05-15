@@ -1,7 +1,7 @@
 from typing import Optional
 from fastapi import FastAPI,status
 from typing import *
-from Object import Dodam_or_School_Cafeteria
+from Object import Dodam_or_School_Cafeteria ,Dodam
 from Object import Dormitory
 
 # from fastapi.responses import JSONResponse
@@ -11,7 +11,7 @@ sys.path.append("/app/python/")
 
 import sentry_sdk
 
-
+'''
 sentry_sdk.init(
     dsn="https://94230547ab4e4ce483f714b4077f4572@o4505178008190976.ingest.sentry.io/4505178011009024",
 
@@ -20,6 +20,8 @@ sentry_sdk.init(
     # We recommend adjusting this value in production,
     traces_sample_rate=1.0,
 )
+'''
+
 
 
 # class SoongsilMenuModel(BaseModel):
@@ -112,6 +114,13 @@ def get_school_cafeteria(date:str):
 @app.get("/sentry-debug")
 async def trigger_error():
     division_by_zero = 1 / 0
+
+@app.get("/test")
+def get_dodam(date: str):
+    today=Dodam(date=date)
+    today.get_menu()
+
+    return today.menu
 
 
 
