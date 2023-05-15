@@ -1,7 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
 import re
-from enum import Enum
 import pandas as pd
 from html_table_parser import parser_functions as parser
 from datetime import date,datetime
@@ -13,7 +12,7 @@ from constant import SOONGGURI_HEADERS
 class Menu(BaseModel):
     date: str
     restaurant_type: str
-    menu: dict=dict()
+    menu: dict
 
 class Restaurant(ABC):
 
@@ -23,7 +22,7 @@ class Restaurant(ABC):
         self.restaurant_type=restaurant_type
         self.soup=None
         self.menu_rows=None
-        self.menu=Menu(date,restaurant_type)
+        self.menu=Menu(date=date,restaurant_type=restaurant_type,menu=dict())
 
     def __str__(self) -> str:
         return f"{self.menu}"
@@ -31,7 +30,6 @@ class Restaurant(ABC):
     def get_soup(self):
         webpage=requests.get(f'http://m.soongguri.com/m_req/m_menu.php?rcd={self.restaurant_type}&sdt={self.date}',headers=SOONGGURI_HEADERS)
         soup:BeautifulSoup = BeautifulSoup(webpage.content, 'html.parser')
-
         self.soup=soup
 
     def get_menu_rows(self):
@@ -46,7 +44,7 @@ class Restaurant(ABC):
         self.menu_rows=menu_nm_dict
 
     @abstractmethod
-    def parse_menu(self):
+    def parse_menu(self,title,text):
         pass
 
     def get_menu(self):
@@ -63,8 +61,15 @@ class Dodam(Restaurant):
     def __init__(self,date) -> None:
         super().__init__(restaurant_type=2,date=date)
     
-    def parse_menu(self):
-        pass
+    def parse_menu(self,title,text):
+        menu = text.find(text=lambda text: text and text.startswith("*알러지유발식품:"))
+        menu=menu.split(":")[1]
+
+        pattern = re.compile(r'\([^)]*\)')
+        menu=re.sub(pattern, '', menu)
+        menu_list=menu.split(",")
+
+        self.menu.menu[title]=menu_list
     
 
 class School_Cafeteria(Restaurant):
