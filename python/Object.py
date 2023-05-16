@@ -8,11 +8,19 @@ from abc import ABC, abstractmethod
 from typing import Optional
 from pydantic import BaseModel
 from constant import SOONGGURI_HEADERS
+from fastapi.encoders import jsonable_encoder
+
+
+class NoMenuError(Exception):
+    def __init__(self,soup):
+        super().__init__(f'파싱 실패 혹은 메뉴가 없습니다.{soup.text}')
 
 class Menu(BaseModel):
     date: str
     restaurant_type: str
     menu: dict
+
+
 
 class Restaurant(ABC):
 
@@ -21,8 +29,8 @@ class Restaurant(ABC):
         self.date=date
         self.restaurant_type=restaurant_type
         self.soup=None
-        self.menu_rows=None
-        self.menu=Menu(date=date,restaurant_type=restaurant_type,menu=dict())
+        self.menu_rows: dict = None
+        self.menu=Menu(date=date,restaurant_type=restaurant_type,menu={})
 
     def __str__(self) -> str:
         return f"{self.menu}"
@@ -54,22 +62,30 @@ class Restaurant(ABC):
         for k,v in self.menu_rows.items():
             self.parse_menu(k,v)
 
-        return self.menu
+        if len(self.menu.menu)==0:
+            raise NoMenuError(self.soup)
+        return jsonable_encoder(self.menu)
 
 class Dodam(Restaurant):
 
     def __init__(self,date) -> None:
         super().__init__(restaurant_type=2,date=date)
+        self.get_menu()
     
     def parse_menu(self,title,text):
-        menu = text.find(text=lambda text: text and text.startswith("*알러지유발식품:"))
-        menu=menu.split(":")[1]
 
-        pattern = re.compile(r'\([^)]*\)')
-        menu=re.sub(pattern, '', menu)
-        menu_list=menu.split(",")
+        try:
+            menu = text.find(text=lambda text: text and text.startswith("*알러지유발식품:"))
+            menu=menu.split(":")[1]
 
-        self.menu.menu[title]=menu_list
+            pattern = re.compile(r'\([^)]*\)')
+            menu=re.sub(pattern, '', menu)
+            menu_list=menu.split(",")
+
+            self.menu.menu[title]=menu_list
+        except:
+            menu=text.find_all("font",text=re.compile("★.*"),attrs={"color":"#ff9900"})
+            self.menu.menu[title]=[i.text.lstrip("★") for i in menu]
     
 
 class School_Cafeteria(Restaurant):
