@@ -3,9 +3,6 @@ FROM python:3.9-slim-buster
 # install pip
 RUN apt-get update && apt-get install -y python3-pip
 
-RUN apt-get update && apt-get install -y cron
-
-
 # set working directory
 WORKDIR /app
 
