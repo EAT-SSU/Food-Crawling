@@ -1,5 +1,6 @@
 #!/bin/bash
 
+cd python
 # Run cron.py in the background
 python cron.py &
 
