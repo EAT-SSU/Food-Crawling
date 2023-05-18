@@ -1,6 +1,9 @@
 #!/bin/bash
 
 cd python
+
+export $(grep -v '^#' .env | xargs)
+
 # Run cron.py in the background
 python cron.py &
 
