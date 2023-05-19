@@ -71,6 +71,9 @@ def testing_School_Cafeteria():
 # testing_Dodam()
 # # testing_School_Cafeteria()
 
+if __name__=="__main__":
+    testing_Dodam()
+    print("Good!")
 
 
 
