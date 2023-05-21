@@ -62,9 +62,38 @@ class Restaurant(ABC):
         for k,v in self.menu_rows.items():
             self.parse_menu(k,v)
 
+        
+        '''
+            TODO:
+                이 부분 예외처리 상당히 이상함.
+                parse_menu 함수에서 처리하는 것이 더 좋을 것 같음.
+        '''
+
         if len(self.menu.menu)==0:
             raise NoMenuError(self.soup)
+            
         return jsonable_encoder(self.menu)
+
+    def parse_by_allergy(self,text) ->list:
+        menu = text.find(text=lambda text: text and text.startswith("*알러지유발식품:"))
+        menu=menu.split(":")[1]
+
+        pattern = re.compile(r'\([^)]*\)')
+        menu=re.sub(pattern, '', menu)
+        menu_list=menu.split(",")
+
+        return menu_list
+
+    def parse_by_food_origin(self,text) ->list:
+        menu = text.find(text=lambda text: text and text.startswith("*원산지:"))
+        menu=menu.split(":")[1]
+
+        pattern = re.compile(r'\([^)]*\)')
+        menu=re.sub(pattern, '', menu)
+        menu_list=menu.split(",")
+
+        return menu_list
+
 
 class Dodam(Restaurant):
 
@@ -75,17 +104,19 @@ class Dodam(Restaurant):
     def parse_menu(self,title,text):
 
         try:
-            menu = text.find(text=lambda text: text and text.startswith("*알러지유발식품:"))
-            menu=menu.split(":")[1]
 
-            pattern = re.compile(r'\([^)]*\)')
-            menu=re.sub(pattern, '', menu)
-            menu_list=menu.split(",")
+            self.menu.menu[title]=self.parse_by_allergy(text)
 
-            self.menu.menu[title]=menu_list
-        except:
-            menu=text.find_all("font",text=re.compile("★.*"),attrs={"color":"#ff9900"})
+        except AttributeError as e: # text 객체에 find 메서드가 없을 경우 발생
+
+            menu=text.find_all("font",text=re.compile("★.*"),attrs={"color":"#ff9900"}) # ★으로 시작하는 문자열을 모두 찾음
             self.menu.menu[title]=[i.text.lstrip("★") for i in menu]
+
+        except ValueError as e: # split() 시도 중 구분자 사이에 문자가 없을 경우 발생
+
+            self.menu.menu[title]=self.parse_by_food_origin(text) # 원산지로 시작하는 문자열을 찾음
+
+            
     
 
 class School_Cafeteria(Restaurant):
@@ -94,8 +125,32 @@ class School_Cafeteria(Restaurant):
         super().__init__(restaurant_type=1,date=date)
         self.get_menu()
     
-    def parse_menu(self):
-        pass
+    def parse_menu(self,title,text):
+
+        # try:
+        #     self.menu.menu[title]=self.parse_by_allergy(text)
+
+        # except AttributeError as e: # text 객체에 find 메서드가 없을 경우 발생
+
+        #     if title=="중식1":
+                
+        #         self.menu.menu[title]=list(text.find(text=re.compile("^뚝")).strip())
+
+        # except ValueError as e: # split() 시도 중 구분자 사이에 문자가 없을 경우 발생
+
+        #     self.menu.menu[title]=self.parse_by_food_origin(text) # 원산지로 시작하는 문자열을 찾음
+        
+        # except:
+        #     raise NoMenuError
+        import openai
+        from using_ai import chat_with_gpt_school_cafeteria
+        import json
+        try:
+            self.menu.menu[title]=json.loads(chat_with_gpt_school_cafeteria(text)) # 원산지로 시작하는 문자열을 찾음
+        except openai.error.RateLimitError:
+            self.menu.menu[title]=json.loads(chat_with_gpt_school_cafeteria(text)) # 원산지로 시작하는 문자열을 찾음
+
+
     
     
 
