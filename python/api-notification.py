@@ -53,27 +53,37 @@ def send_slack_message(api_response):
 
 
 @monitor(monitor_slug='qq')
-def testing_Dodam():
+def testing_Dodam(date):
     try:
-        api_response = Dodam(date=today).get_menu()
+        api_response = Dodam(date=date).get_menu()
         send_slack_message(api_response)
     except Exception as e:
         sentry_sdk.capture_exception(e)
 
 @monitor(monitor_slug='qq')
-def testing_School_Cafeteria():
-    try:
-        api_response = School_Cafeteria(date=today)
-        send_slack_message(api_response)
-    except Exception as e:
-        sentry_sdk.capture_exception(e)
+def testing_School_Cafeteria(date):
+    # try:
+    #     api_response = School_Cafeteria(date=date)
+    #     send_slack_message(api_response)
+    # except Exception as e:
+    #     sentry_sdk.capture_exception(e)
+    api_response = School_Cafeteria(date=date).get_menu()
+    print(api_response, type(api_response))
+    send_slack_message(api_response)
+
+
 
 # testing_Dodam()
 # # testing_School_Cafeteria()
 
 if __name__=="__main__":
-    testing_Dodam()
-    print("Good!")
+    # testing_Dodam()
+    # print("Good!")
+    # testing_School_Cafeteria(date="20230525")
+
+
+    # for i in range(2,7):
+    #     testing_School_Cafeteria(date=f"2023052{i}")
 
 
 
