@@ -1,5 +1,9 @@
 import openai
 import os
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 # OpenAI API 인증
 openai.api_key = os.environ.get("GPT_API_KEY")
