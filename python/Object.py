@@ -14,8 +14,8 @@ import json
 
 
 class NoMenuError(Exception):
-    def __init__(self, soup):
-        super().__init__(f'파싱 실패 혹은 메뉴가 없습니다.{soup.text}')
+    def __init__(self, soup, date):
+        super().__init__(f'파싱 실패 혹은 메뉴가 없습니다.날짜 {date}.{soup.text}')
 
 
 class Menu(BaseModel):
@@ -28,7 +28,7 @@ class Restaurant(ABC):
 
     def __init__(self, date, restaurant_type) -> None:
         super().__init__()
-        self.date = date
+        self.date = date #%Y%m%d 형식이어야만 함!
         self.restaurant_type = restaurant_type
         self.soup = None
         self.menu_rows: dict = None
@@ -41,6 +41,12 @@ class Restaurant(ABC):
         webpage = requests.get(
             f'http://m.soongguri.com/m_req/m_menu.php?rcd={self.restaurant_type}&sdt={self.date}', headers=SOONGGURI_HEADERS)
         soup: BeautifulSoup = BeautifulSoup(webpage.content, 'html.parser')
+
+        is_rest = True if soup.find(text="오늘은 쉽니다.") else False
+
+        if is_rest:
+            raise NoMenuError(soup=self.soup,date=self.date)
+
         self.soup = soup
 
     def get_menu_rows(self):
@@ -72,9 +78,21 @@ class Restaurant(ABC):
         '''
 
         if len(self.menu.menu) == 0:
-            raise NoMenuError(self.soup)
+            raise NoMenuError(self.soup,date=self.date)
+        else:
+            def is_empty_nested_list(text_list):
+                for text in text_list:
+                    if isinstance(text, list) and len(text) == 0:
+                        return True
+                return False
+            
+            if is_empty_nested_list(self.menu.menu.values())==True:
+                raise NoMenuError(self.soup,date=self.date)
+            else:
+                return jsonable_encoder(self.menu)
 
-        return jsonable_encoder(self.menu)
+
+
 
     def parse_by_allergy(self, text) -> list:
         menu = text.find(
@@ -96,6 +114,16 @@ class Restaurant(ABC):
         menu_list = menu.split(",")
 
         return menu_list
+    
+    def trim_space_symbols(text_ary):
+
+        pattern = r'^[\W_]+|[\W_]+$'
+        # 정규표현식을 사용하여 특수문자를 제거
+
+        trimmed_text_ary=[re.sub(pattern,'',element.strip()) for element in text_ary]
+
+        return trimmed_text_ary
+
 
 
 class Dodam(Restaurant):
@@ -107,18 +135,15 @@ class Dodam(Restaurant):
     def parse_menu(self, title, text):
 
         try:
-
-            menu = text.find_all("font", text=re.compile(
-                "★.*"), attrs={"color": "#ff9900"})  # ★으로 시작하는 문자열을 모두 찾음
-            self.menu.menu[title] = [i.text.lstrip("★") for i in menu]
+            chatgpt_response=chat_with_gpt_dodam(text)
+            self.menu.menu[title] = self.trim_space_symbols(chatgpt_response)
 
         except:
-            try:
-                self.menu.menu[title] = chat_with_gpt_dodam(text)
-            except openai.error.RateLimitError:
-                self.menu.menu[title] = chat_with_gpt_dodam(text)
-            except:
-                raise NoMenuError(self.soup)
+
+            menus = text.find_all("font", text=re.compile("★.*"), attrs={"color": "#ff9900"})  # ★으로 시작하는 문자열을 모두 찾음
+            self.menu.menu[title] = [menu.text.strip().lstrip("★") for menu in menus]
+
+            
 
 
 class School_Cafeteria(Restaurant):
@@ -130,14 +155,12 @@ class School_Cafeteria(Restaurant):
     def parse_menu(self, title, text):
 
         try:
-
-            self.menu.menu[title] = json.loads(
-                chat_with_gpt_school_cafeteria(text))  # 원산지로 시작하는 문자열을 찾음
+            chatgpt_response=chat_with_gpt_school_cafeteria(text)
+            self.menu.menu[title] = self.trim_space_symbols(chatgpt_response)
 
         except openai.error.RateLimitError:
-
-            self.menu.menu[title] = json.loads(
-                chat_with_gpt_school_cafeteria(text))  # 원산지로 시작하는 문자열을 찾음
+            chatgpt_response=chat_with_gpt_school_cafeteria(text)
+            self.menu.menu[title] = self.trim_space_symbols(chatgpt_response)
 
 
 class Dormitory:
@@ -149,7 +172,7 @@ class Dormitory:
         self.soup: BeautifulSoup = BeautifulSoup(
             webpage.content, 'html.parser')
         self.table = None
-        self.dict = dict()
+        self.menu_list=list()
 
     def refine_table(self):
         table_tag = self.soup.find("table", "boxstyle02")
@@ -168,13 +191,26 @@ class Dormitory:
 
     def get_table(self):
         for index, rows in self.table.iterrows():
-            self.dict[index] = dict()
+            new_date=index.split()[0]
+            new_date=new_date.replace("-","")
+            # new_date = new_date.strftime("%Y%m%d")
+
+            new_menu=Menu(date=new_date,restaurant_type=3,menu={})
+
+            self.menu_list.append(new_menu)
+            
+            # self.dict[new_date] = dict()
             for col_name in self.table.columns:
-                # print(f'{index},{col_name},{rows[col_name]}')
-                self.dict[index][col_name] = rows[col_name]
+                new_menu.menu[col_name]=rows[col_name]
+    
+    def get_menu(self):
+        self.refine_table()
+        self.get_table()
+
+        return jsonable_encoder(self.menu_list)
 
     def __str__(self) -> str:
-        return self.dict
+        return self.menu_list
 
 
 # class Dodam_or_School_Cafeteria:
