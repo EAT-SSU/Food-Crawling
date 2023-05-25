@@ -45,10 +45,10 @@ def get_school_cafeteria(date: str):
 @app.get("/foods/dormitory",
          description="기숙사 식당의 일주일 치 메뉴를 받아오는 api입니다, date format->yyyymmdd. ex)20230502")
 def get_school_cafeteria(date: str):
-    todaymenu = Dormitory(date)
-    todaymenu.refine_table()
-    todaymenu.get_table()
-    return todaymenu.dict
+    today = Dormitory(date)
+
+    return today.get_menu()
+
 
 
 @app.get("/sentry-debug")
