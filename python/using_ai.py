@@ -1,7 +1,8 @@
 import openai
 import os
 from dotenv import load_dotenv
-
+from json import loads
+import time
 
 load_dotenv()
 
@@ -95,22 +96,38 @@ Rice with chicken deriyaki
 '''
 # ChatGPT 모델과 대화하기 위한 함수
 def chat_with_gpt_dodam(today):
-    response=openai.ChatCompletion.create(
-    model="gpt-3.5-turbo",
-    messages=[
-        {"role": "system", "content": "너는 list만을 반환하는 함수의 역할을 맡았다. input값에서 중요한 메뉴만을 골라서 list형태로 반환해. list에는 input값에서의 메인 메뉴만 골라낸 요소들의 이름이 들어가. 그외에 부가적인 설명은 하지 않고 오직 json을 반환해."},
-        {"role": "user", "content": f"input은 바로 이거야. 여기서 메뉴를 골라내어 배열을 만들고 반환해줘.:{dodam_lunch_1}"},
-        {"role": "assistant", "content": '["오꼬노미돈까스","웨지감자튀김*케찹"]'},
-        {"role": "user", "content": f"input은 바로 이거야. 여기서 메뉴를 골라내어 list을 반환해줘.:{today}"},
-    ]
-    )
 
-    if response and response.choices:
-        return response.choices[0].message.content.strip()
-    else:
-        return ""
+    retries = 3  # 최대 재시도 횟수
+    delay = 2  # 재시도 사이의 대기 시간 (초)
 
-def chat_with_gpt_school_cafeteria(today):
+    for _ in range(retries):
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "너는 list만을 반환하는 함수의 역할을 맡았다. input값에서 중요한 메뉴만을 골라서 list형태로 반환해. list에는 input값에서의 메인 메뉴만 골라낸 요소들의 이름이 들어가. 그외에 부가적인 설명은 하지 않고 오직 json을 반환해."},
+                    {"role": "user", "content": f"input은 바로 이거야. 여기서 메뉴를 골라내어 배열을 만들고 반환해줘.:{dodam_lunch_1}"},
+                    {"role": "assistant", "content": '["오꼬노미돈까스","웨지감자튀김*케찹"]'},
+                    {"role": "user", "content": f"input은 바로 이거야. 여기서 메뉴를 골라내어 list을 반환해줘.:{today}"},
+                ]
+            )
+
+            if response and response.choices:
+                response_list=loads(response.choices[0].message.content.strip())
+                if response_list is list:
+                    return response_list
+
+        except openai.error.RateLimitError:
+            # API 요청 제한에 도달한 경우
+            print("API 요청 제한에 도달했습니다. 잠시 대기 후 재시도합니다.")
+            time.sleep(delay)
+    
+    # 최대 재시도 횟수를 초과한 경우
+    print("재시도 횟수를 초과했습니다. API 호출이 실패했습니다.")
+    return list()
+
+
+def chat_with_gpt_school_cafeteria(today)->list:
     response=openai.ChatCompletion.create(
     model="gpt-3.5-turbo",
     messages=[
@@ -124,8 +141,8 @@ def chat_with_gpt_school_cafeteria(today):
     )
 
     if response and response.choices:
-        return response.choices[0].message.content.strip()
+        return loads(response.choices[0].message.content.strip())
     else:
-        return ""
+        return list()
 
 
