@@ -91,7 +91,7 @@ def practice_student_restarant(date:str):
 
     if soup.find(text="오늘은 쉽니다."):
         logger.error(f"The date is holiday. {date}")
-        raise HolidayError
+        raise HolidayError(date)
 
     tr_list = soup.find_all('tr')
     menu_nm_dict = dict()
@@ -125,7 +125,7 @@ def practice_dodam(date:str):
 
     if soup.find(text="오늘은 쉽니다."):
         logger.error(f"The date is holiday. {date}")
-        raise HolidayError
+        raise HolidayError(date)
 
     tr_list = soup.find_all('tr')
     menu_nm_dict = dict()
