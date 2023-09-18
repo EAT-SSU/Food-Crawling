@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV PYTHONPATH=/app/python
 
 # expose port
-EXPOSE 8000
+EXPOSE 5000
 
 # make the entrypoint script executable
 RUN chmod +x entrypoint.sh

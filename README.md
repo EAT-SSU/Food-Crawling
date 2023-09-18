@@ -5,7 +5,7 @@
 git clone https://github.com/EAT-SSU/food-crawling.git
 cd food-crawling
 docker build -t fastapi_crawling .
-docker run -i -t --env-file ./.env -p 80:8000 --restart=always fastapi_crawling
+docker run -i -t --env-file ./.env -p 5000:5000 --restart=always fastapi_crawling
 ```
 
 ## 인스턴스에 다시 배포할 경우
@@ -13,5 +13,5 @@ docker run -i -t --env-file ./.env -p 80:8000 --restart=always fastapi_crawling
 cd food-crawling
 git pull
 docker build -t fastapi_crawling .
-docker run -i -t --env-file ./.env -p 80:8000 --restart=always fastapi_crawling
+docker run -i -t --env-file ./.env -p 5000:5000 --restart=always fastapi_crawling
 ```
