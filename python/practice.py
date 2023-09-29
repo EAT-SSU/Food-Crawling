@@ -2,7 +2,6 @@ from bs4 import BeautifulSoup
 import requests
 import json
 import logging
-import boto3
 import openai
 import os
 from dotenv import load_dotenv
@@ -40,7 +39,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 # 파일 핸들러 생성 및 설정
-file_handler = logging.FileHandler('my_log.log')
+file_handler = logging.FileHandler('../data/my_log.log')
 file_handler.setLevel(logging.DEBUG)
 
 # 콘솔 핸들러 생성 및 설정 (표준 출력에 로그를 출력)
