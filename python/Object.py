@@ -20,7 +20,7 @@ class NoMenuError(Exception):
 
 class Menu(BaseModel):
     date: str
-    restaurant_type: str
+    restaurant: str
     menu: dict
 
 
@@ -195,7 +195,7 @@ class Dormitory:
             new_date=new_date.replace("-","")
             # new_date = new_date.strftime("%Y%m%d")
 
-            new_menu=Menu(date=new_date,restaurant_type=3,menu={})
+            new_menu=Menu(date=new_date,restaurant="기숙사식당",menu={})
 
             self.menu_list.append(new_menu)
             
