@@ -58,3 +58,4 @@ sequenceDiagram
     SNS -->> Slack: 메시지 전달
     Slack ->> schedule_dodam: 처리 완료 응답
 ```
+
