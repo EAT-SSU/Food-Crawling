@@ -30,7 +30,18 @@ Food Scrapper Serverless는 AWS Lambda를 이용하여 학교 식당 메뉴를 �
 npm install -g serverless
 ```
 
-2. secrets.yml 파일 생성
+2. secrets.yml 파일 생성 (노션 참조)
+3. serverless 의존성 폴더 생성
+```bash
+mkdir -p python-requirements-layer/python/lib/python3.9/site-packages
+pip install -r requirements.txt -t python-requirements-layer/python/lib/python3.9/site-packages
+```
+4. serverless plugin 설치
+```bash
+serverless plugin install -n serverless-step-functions
+```
+5. serverless credential 등록 (노션 참조)
+
 
 ## Structure
 
