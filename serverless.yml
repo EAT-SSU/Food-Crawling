@@ -177,4 +177,4 @@ functions:
 
 plugins:
   - serverless-step-functions
-  - serverless-offline
+  # - serverless-offline
