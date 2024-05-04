@@ -17,7 +17,7 @@ def lambda_handler(event, context):
 
     response = invoke_dormitory_lambda_request(date)
     body = json.dumps(response.json(), ensure_ascii=False).encode("utf-8")
-
+    send_slack_message(date, response.json())
     return {
         'statusCode': 200,
         'body': body
@@ -25,11 +25,11 @@ def lambda_handler(event, context):
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def invoke_dormitory_lambda_request(date):
     response = requests.get(DORMITORY_LAMBDA_BASE_URL,params={"date": date})
-
+    
     return response
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-async def send_slack_message(date, menu):
+def send_slack_message(date, menu):
     payload = {
         "channel": "#api-notification",
         "username": "학식봇",

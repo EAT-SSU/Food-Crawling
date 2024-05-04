@@ -33,7 +33,10 @@ functions:
       - !Ref PythonRequirementsLambdaLayer
     timeout: 60
     events:
-      - schedule: cron(0 8 ? * 2 *)
+      - schedule:
+          method: scheduler
+          rate: cron(0 16 ? * 1 *)
+          timezone: Asia/Seoul
       - http:
           path: schedule_haksik
           method: get
@@ -41,7 +44,7 @@ functions:
           request:
             parameters:
               querystrings:
-                delayed_schedule: true
+                delayed_schedule: false
 
   getHaksik:
     handler: functions.scrapping.get_haksik.lambda_handler
@@ -64,7 +67,10 @@ functions:
       - !Ref PythonRequirementsLambdaLayer
     timeout: 60
     events:
-      - schedule: cron(0 8 ? * 2 *)
+      - schedule:
+          method: scheduler
+          rate: cron(0 16 ? * 1 *)
+          timezone: Asia/Seoul
       - http:
           path: schedule_dodam
           method: get
@@ -96,7 +102,10 @@ functions:
       - !Ref PythonRequirementsLambdaLayer
     timeout: 60
     events:
-      - schedule: cron(0 8 ? * 2 *)
+      - schedule:
+          method: scheduler
+          rate: cron(0 8 ? * 2 *)
+          timezone: Asia/Seoul
       - http:
           path: schedule_dormitory
           method: get
