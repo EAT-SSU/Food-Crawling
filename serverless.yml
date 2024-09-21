@@ -174,7 +174,20 @@ functions:
 #            Type: Task
 #            Resource: !GetAtt GetDormitoryLambdaFunction.Arn
 #            End: true
+package:
+  exclude:
+    - tests/**
+    - README.md
+    - .git/**
+    - .serverless/**
+    - python-requirements-layer/**
 
 plugins:
   - serverless-step-functions
   - serverless-offline
+  - serverless-python-requirements
+custom:
+  pythonRequirements:
+    dockerizePip: true  # 리눅스 호환 패키지를 설치하기 위해 Docker 사용
+    layer: true  # 패키지를 Lambda Layer로 설치
+

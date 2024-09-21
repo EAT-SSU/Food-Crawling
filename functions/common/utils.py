@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 from bs4 import BeautifulSoup
-import pytz
+# import pytz
 
 
 def parse_table_to_dict(response: requests.Response):
