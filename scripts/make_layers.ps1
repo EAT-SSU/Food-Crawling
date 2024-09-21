@@ -5,11 +5,11 @@ $layerDir = ".\python-requirements-layer"
 Remove-Item -Path $layerDir -Recurse -ErrorAction SilentlyContinue
 New-Item -Path $layerDir\python -ItemType Directory -Force
 
-# Export requirements from Poetry
+# Export requirements from Poetry (optional, if you still want to keep it for reference)
 poetry export -f requirements.txt --output $layerDir\requirements.txt --without-hashes
 
-# Install packages to the layer directory
-pip install -r requirements.txt -t $layerDir/python/lib/python3.9/site-packages
+# Install packages to the layer directory using pip
+python -m pip install -r $layerDir\requirements.txt -t $layerDir\python\lib\python3.9\site-packages
 
 # Clean up
 Remove-Item -Path $layerDir\requirements.txt
