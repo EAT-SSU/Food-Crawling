@@ -13,3 +13,6 @@ def test_fetch_and_refine_dodam():
 def test_get_dodam_from_soongguri():
     response = get_dodam_from_soongguri("20240325")
     assert response.status_code == 200
+
+if __name__ == '__main__':
+    menu: dict = fetch_and_refine_dodam("20240924")
