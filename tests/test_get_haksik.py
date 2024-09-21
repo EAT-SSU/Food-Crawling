@@ -20,3 +20,6 @@ def test_post_haksik_lunch():
     response = post_haksik_lunch("20240325", ["꼬치어묵우동", "칠리탕수육"])
 
     assert response.status_code == 200
+
+if __name__ == '__main__':
+    menu: dict = fetch_and_refine_haksik("20240913")
