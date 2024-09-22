@@ -35,7 +35,8 @@ functions:
     events:
       - schedule:
           method: scheduler
-          rate: cron(0 16 ? * 1 *)
+          rate:
+            - cron(0 16 ? * 1 *)
           timezone: Asia/Seoul
       - http:
           path: schedule_haksik
@@ -69,7 +70,8 @@ functions:
     events:
       - schedule:
           method: scheduler
-          rate: cron(0 16 ? * 1 *)
+          rate:
+            - cron(0 16 ? * 1 *)
           timezone: Asia/Seoul
       - http:
           path: schedule_dodam
@@ -104,7 +106,8 @@ functions:
     events:
       - schedule:
           method: scheduler
-          rate: cron(0 8 ? * 2 *)
+          rate:
+            - cron(0 8 ? * 2 *)
           timezone: Asia/Seoul
       - http:
           path: schedule_dormitory
