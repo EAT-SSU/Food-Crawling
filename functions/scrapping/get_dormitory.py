@@ -10,18 +10,19 @@ from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 from functions.common.utils import make2d, RequestBody
-from functions.common.constant import DORMITORY_LUNCH_PRICE,API_BASE_URL
+from functions.common.constant import DORMITORY_LUNCH_PRICE, API_BASE_URL, DEV_API_BASE_URL
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2), reraise=True)
-def post_dormitory_menu(date, meal_time, menus):
+def post_dormitory_menu(date, meal_time, menus, is_dev):
     dormitory_form_data = asdict(RequestBody(price=DORMITORY_LUNCH_PRICE, menuNames=menus))
     params = {
         "date": date,
         "restaurant": "DORMITORY",
         "time": get_time_of_day(meal_time)
     }
-    response = requests.post(url=API_BASE_URL, json=dormitory_form_data,
+    url = DEV_API_BASE_URL if is_dev else API_BASE_URL  # 삼항 연산
+    response = requests.post(url=url, json=dormitory_form_data,
                              params=params, timeout=10)
     return response
 
@@ -41,7 +42,8 @@ def lambda_handler(event, context):
 
             # '운영'이 포함된 메뉴가 없을 경우에만 메뉴 게시
             if not any("운영" in menu for menu in menus):
-                post_dormitory_menu(today["date"], meal_time, menus)
+                post_dormitory_menu(today["date"], meal_time, menus)  # production 서버에 post하는 부분
+                post_dormitory_menu(today["date"], meal_time, menus, is_dev=True)  # dev 서버에도 post하는 부분
 
     return {
         'statusCode': 200,
@@ -104,4 +106,3 @@ class Dormitory:
         self.get_table()
 
         return self.menu_list
-

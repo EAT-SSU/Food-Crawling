@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 from functions.common.constant import DODAM_LUNCH_PRICE, DODAM_DINNER_PRICE, SOONGGURI_DODAM_RCD, API_BASE_URL, \
-    ENCRYPTED
+    ENCRYPTED, DEV_API_BASE_URL
 from functions.common.utils import strip_string_from_html, parse_table_to_dict, RequestBody, check_for_holidays
 from functions.common.menu_example import dodam_lunch_1
 
@@ -28,8 +28,10 @@ def lambda_handler(event, context):
             continue
         if "중식" in restrant_name:
             post_dodam_lunch(date, menus)
+            post_dodam_lunch(date, menus,is_dev=True)  # prod 서버에 post
         elif "석식" in restrant_name:
             post_dodam_dinner(date, menus)
+            post_dodam_lunch(date,menus,is_dev=True)  # prod 서버에 post
         else:
             logger.error(f"중식과 석식이 아닌 메뉴가 존재합니다. {restrant_name}이라는 메뉴가 추가된 듯합니다.")
             raise Exception
@@ -41,9 +43,10 @@ def lambda_handler(event, context):
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2), reraise=True)
-def post_dodam_lunch(date, menus):
+def post_dodam_lunch(date, menus, is_dev=False):
     lunch_form_data = asdict(RequestBody(DODAM_LUNCH_PRICE, menus))
-    response = requests.post(url=API_BASE_URL, json=lunch_form_data,
+    url = DEV_API_BASE_URL if is_dev else API_BASE_URL  # 삼항 연산
+    response = requests.post(url=url, json=lunch_form_data,
                              params={"date": date, "restaurant": "DODAM", "time": "LUNCH"}, timeout=10)
     response.raise_for_status()  # 성공적인 응답이 아닌 경우 예외를 발생시킴
 
@@ -51,9 +54,10 @@ def post_dodam_lunch(date, menus):
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2), reraise=True)
-def post_dodam_dinner(date, menus):
+def post_dodam_dinner(date, menus, is_dev=False):
     dinner_form_data = asdict(RequestBody(DODAM_DINNER_PRICE, menus))
-    response = requests.post(url=API_BASE_URL, json=dinner_form_data,
+    url = DEV_API_BASE_URL if is_dev else API_BASE_URL  # 삼항 연산
+    response = requests.post(url=url, json=dinner_form_data,
                              params={"date": date, "restaurant": "DODAM", "time": "DINNER"}, timeout=10)
 
     response.raise_for_status()

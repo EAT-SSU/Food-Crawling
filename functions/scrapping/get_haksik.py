@@ -9,9 +9,10 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 
 from functions.common.logging_config import setup_logging
 from functions.common.constant import HAKSIK_ONE_DOLLOR_MORNING_PRICE, HAKSIK_LUNCH_PRICE, HAKSIK_DINNER_PRICE, \
-    SOONGGURI_HAKSIK_RCD, API_BASE_URL, ENCRYPTED
+    SOONGGURI_HAKSIK_RCD, API_BASE_URL, ENCRYPTED, DEV_API_BASE_URL
 from functions.common.utils import parse_table_to_dict, strip_string_from_html, RequestBody, check_for_holidays
 from functions.common.menu_example import student_lunch_1
+
 
 def lambda_handler(event, context):
     setup_logging(context.function_name)
@@ -25,8 +26,11 @@ def lambda_handler(event, context):
             continue
         if "중식" in restrant_name:
             post_haksik_lunch(date, menus)
+            post_haksik_lunch(date, menus, is_dev=True)
         elif "석식" in restrant_name:  # 석식이면 1000원 조식인 웃긴 상황이지만 어쩔 수가 없다. 추후 1000원 학식 부분 이상하면 꼭 체크!
             post_haksik_one_dollor_morning(date, menus)
+            post_haksik_one_dollor_morning(date, menus, is_dev=True)  # dev 서버에 post
+
         else:
             logger.error(f"중식과 석식이 아닌 메뉴가 존재합니다. {restrant_name}이라는 식사 시간이 추가된 듯 합니다.")
             raise Exception
@@ -38,18 +42,20 @@ def lambda_handler(event, context):
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2), reraise=True)
-def post_haksik_lunch(date, menus):
-    lunch_form_data = asdict(RequestBody(HAKSIK_LUNCH_PRICE,menus))
-    response = requests.post(url=API_BASE_URL, json=lunch_form_data,
+def post_haksik_lunch(date, menus, is_dev=False):
+    lunch_form_data = asdict(RequestBody(HAKSIK_LUNCH_PRICE, menus))
+    url = DEV_API_BASE_URL if is_dev else API_BASE_URL  # 삼항 연산
+    response = requests.post(url=url, json=lunch_form_data,
                              params={"date": date, "restaurant": "HAKSIK", "time": "LUNCH"}, timeout=10)
     response.raise_for_status()
     return response
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2), reraise=True)
-def post_haksik_one_dollor_morning(date, menus):
-    one_dollor_morning_form_data = asdict(RequestBody(HAKSIK_ONE_DOLLOR_MORNING_PRICE,menus))
-    response = requests.post(url=API_BASE_URL, json=one_dollor_morning_form_data,
+def post_haksik_one_dollor_morning(date, menus, is_dev=False):
+    one_dollor_morning_form_data = asdict(RequestBody(HAKSIK_ONE_DOLLOR_MORNING_PRICE, menus))
+    url = DEV_API_BASE_URL if is_dev else API_BASE_URL  # 삼항 연산
+    response = requests.post(url=url, json=one_dollor_morning_form_data,
                              params={"date": date, "restaurant": "HAKSIK", "time": "MORNING"}, timeout=10)
     response.raise_for_status()
     return response
@@ -60,8 +66,6 @@ def get_haksik_from_soongguri(date):
     response = requests.get(f"http://m.soongguri.com/m_req/m_menu.php?rcd={SOONGGURI_HAKSIK_RCD}&sdt={date}")
     response.raise_for_status()  # Ensure we got a good response
     return response
-
-
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
