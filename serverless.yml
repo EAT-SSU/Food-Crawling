@@ -14,6 +14,7 @@ provider:
     SLACK_WEBHOOK_URL: ${file(secrets.yml):SLACK_URL}
     GPT_API_KEY: ${file(secrets.yml):GPT_API_KEY}
     API_BASE_URL: ${file(secrets.yml):API_BASE_URL}
+    DEV_API_BASE_URL: ${file(secrets.yml):DEV_API_BASE_URL}
     DODAM_LAMBDA_BASE_URL: ${file(secrets.yml):DODAM_LAMBDA_BASE_URL}
     HAKSIK_LAMBDA_BASE_URL: ${file(secrets.yml):HAKSIK_LAMBDA_BASE_URL}
     DORMITORY_LAMBDA_BASE_URL: ${file(secrets.yml):DORMITORY_LAMBDA_BASE_URL}

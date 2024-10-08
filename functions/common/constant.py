@@ -11,6 +11,7 @@ ENCRYPTED = os.environ['GPT_API_KEY']
 openai.api_key = ENCRYPTED
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 API_BASE_URL = os.getenv("API_BASE_URL")
+DEV_API_BASE_URL = os.getenv("DEV_API_BASE_URL")
 
 # AWS lambda base url
 DODAM_LAMBDA_BASE_URL = os.getenv("DODAM_LAMBDA_BASE_URL")

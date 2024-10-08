@@ -1,11 +1,10 @@
 from dataclasses import dataclass, field
 from typing import List
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import requests
 from bs4 import BeautifulSoup
-# import pytz
+from pytz import timezone
 
 
 def parse_table_to_dict(response: requests.Response):
@@ -121,7 +120,7 @@ def make2d(table, text_only=True):
 
 
 def get_next_weekdays():
-    seoul_tz = ZoneInfo("Asia/Seoul")
+    seoul_tz = timezone("Asia/Seoul")
     current_date = datetime.now().astimezone(seoul_tz)
 
     # 현재 요일이 월요일이면 7을, 그렇지 않으면 다음 주 월요일까지의 날짜 계산
@@ -140,7 +139,7 @@ def get_next_weekdays():
 
 def get_current_weekdays():
     # 해당하는 날짜를 받으면 그 주의 월요일부터 금요일까지의 날짜를 반환
-    seoul_tz = ZoneInfo("Asia/Seoul")
+    seoul_tz = timezone("Asia/Seoul")
     current_date = datetime.today().astimezone(seoul_tz)
 
     # 해당 주 월요일까지의 날짜 계산
