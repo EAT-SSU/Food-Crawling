@@ -48,3 +48,6 @@ def test_get_dormitory_from_ssudorm():
     response = dorm.get_dormitory_from_ssudorm()
     assert response.status_code == 200
 
+if __name__ == '__main__':
+    dorm = Dormitory("20241016")
+    response = dorm.get_dormitory_from_ssudorm()

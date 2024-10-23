@@ -11,6 +11,7 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 
 from functions.common.utils import make2d, RequestBody
 from functions.common.constant import DORMITORY_LUNCH_PRICE, API_BASE_URL, DEV_API_BASE_URL
+from functions.schedule.schedule_dormitory import send_slack_message
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2), reraise=True)
@@ -42,7 +43,7 @@ def lambda_handler(event, context):
 
             # '운영'이 포함된 메뉴가 없을 경우에만 메뉴 게시
             if not any("운영" in menu for menu in menus):
-                post_dormitory_menu(today["date"], meal_time, menus)  # production 서버에 post하는 부분
+                post_dormitory_menu(today["date"], meal_time, menus, is_dev=False)  # production 서버에 post하는 부분
                 post_dormitory_menu(today["date"], meal_time, menus, is_dev=True)  # dev 서버에도 post하는 부분
 
     return {
