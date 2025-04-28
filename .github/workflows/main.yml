@@ -1,0 +1,32 @@
+name: 간단한 출력 테스트
+
+on:
+  workflow_dispatch:  # 수동으로 워크플로우 실행 가능
+  schedule:
+    - cron: '*/5 * * * *'  # 5분마다 실행
+
+jobs:
+  print-message:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 현재 시간 출력
+        run: echo "현재 시간은 $(date) 입니다."
+
+      - name: 간단한 메시지 출력
+        run: |
+          echo "GitHub Actions 테스트 중입니다!"
+          echo "5분마다 이 메시지가 출력됩니다."
+          echo "워크플로우 실행 ID: ${{ github.run_id }}"
+
+      - name: 랜덤 숫자 생성
+        run: |
+          RANDOM_NUMBER=$((RANDOM % 100 + 1))
+          echo "오늘의 행운의 숫자: $RANDOM_NUMBER"
+          echo "RANDOM_NUMBER=$RANDOM_NUMBER" >> $GITHUB_ENV
+
+      - name: 환경 정보 출력
+        run: |
+          echo "운영체제: ${{ runner.os }}"
+          echo "GitHub 저장소: ${{ github.repository }}"
+          echo "브랜치: ${{ github.ref }}"
+          echo "이전 단계에서 생성된 랜덤 숫자: ${{ env.RANDOM_NUMBER }}"
