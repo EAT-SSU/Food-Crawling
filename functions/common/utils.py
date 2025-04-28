@@ -11,7 +11,7 @@ from openai import OpenAI
 from pytz import timezone
 from tenacity import retry, stop_after_attempt, wait_fixed
 
-from functions.common.constant import GPT_FUNCTION_TOOLS, GPT_SYSTEM_PROMPT, GPT_MODEL, ENCRYPTED
+from functions.common.constant import GPT_FUNCTION_TOOLS, GPT_SYSTEM_PROMPT, GPT_MODEL, ENCRYPTED, SLACK_WEBHOOK_URL
 from functions.common.models import RawMenuData, RestaurantType, ParsedMenuData
 
 logger = logging.getLogger()
@@ -287,3 +287,24 @@ def create_github_summary(results: List[ParsedMenuData]):
             f.write(summary_md)
     else:
         logger.info(summary_md)
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def send_slack_message(parsed_menu_data:ParsedMenuData):
+    payload = {
+        "channel": "#api-notification",
+        "username": "학식봇",
+        "text": f"{parsed_menu_data.restaurant}식당({parsed_menu_data.date})의 식단 {parsed_menu_data.menus}\n성공 여부: {parsed_menu_data.success}, 에러 {parsed_menu_data.error_slots}",
+        "icon_emoji": ":ghost:"
+    }
+    headers = {'Content-Type': 'application/json'}
+
+    import json
+    response = requests.post(
+        SLACK_WEBHOOK_URL,
+        data=json.dumps(payload),
+        headers=headers,
+        timeout=10
+    )
+
+    response.raise_for_status()  # HTTP 오류 발생 시 예외 발생
+    return response.text
