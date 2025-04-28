@@ -33,7 +33,7 @@ jobs:
           python -c "
           import sys
           sys.path.append('.')
-          from functions.schedule.schedule_dodam import schedule_dodam
+          from functions.scrapping.get_dodam import schedule_dodam
 
           manual_dates = manual_dates_input.split(',') if manual_dates_input else None
           schedule_dodam(manual_dates=manual_dates)
