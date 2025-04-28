@@ -1,16 +1,14 @@
-name: 간단한 입력 워크플로우
-
+name: "Simple Input Workflow"
 on:
   workflow_dispatch:
     inputs:
       message:
-        description: '출력할 메시지'
+        description: "Message to display"
         required: true
-        default: '안녕하세요'
-
+        default: "Hello World"
 jobs:
-  print-message:
+  print:
     runs-on: ubuntu-latest
     steps:
-      - name: 입력된 메시지 출력
-        run: echo "입력한 메시지: ${{ github.event.inputs.message }}"
+      - name: "Print the input"
+        run: echo ${{ github.event.inputs.message }}
