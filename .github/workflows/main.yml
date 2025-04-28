@@ -40,6 +40,6 @@ jobs:
           sys.path.append('.')
           from functions.scrapping.get_dodam import schedule_dodam
 
-          manual_dates = manual_dates_input.split(',') if manual_dates_input else None
+          manual_dates = '${manual_dates_input}'.split(',') if '${manual_dates_input}' else None
           schedule_dodam(manual_dates=manual_dates)
           "
