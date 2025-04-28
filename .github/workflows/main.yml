@@ -27,6 +27,11 @@ jobs:
         run: pip install -r requirements.txt
         
       - name: 도담식당 메뉴 스케줄러 실행
+        env:
+          GPT_API_KEY: ${{ secrets.GPT_API_KEY }}
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          DEV_API_BASE_URL: ${{ secrets.DEV_API_BASE_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           manual_dates_input='${{ github.event.inputs.manual_dates }}'
           
