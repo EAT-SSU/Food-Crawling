@@ -1,45 +1,61 @@
-import re
-import json
 import logging
 from dataclasses import asdict
+from typing import List, Optional
 
-from openai import OpenAI
 import requests
-from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 from functions.common.constant import DODAM_LUNCH_PRICE, DODAM_DINNER_PRICE, SOONGGURI_DODAM_RCD, API_BASE_URL, \
-    ENCRYPTED, DEV_API_BASE_URL
-from functions.common.utils import strip_string_from_html, parse_table_to_dict, RequestBody, check_for_holidays
-from functions.common.menu_example import dodam_lunch_1
+    DEV_API_BASE_URL
+from functions.common.models import RequestBody, RawMenuData, ParsedMenuData
+from functions.common.utils import check_for_holidays, extract_main_dishes_gpt, get_next_weekdays, \
+    parse_raw_menu_text_from_html, create_github_summary, send_slack_message, get_current_weekdays
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-def lambda_handler(event, context):
-    date = event["queryStringParameters"]["date"]
+def schedule_dodam(is_current_week: bool = False, manual_dates: Optional[List[str]] = None):
+    if manual_dates:
+        weekdays = manual_dates
+    else:
+        weekdays = get_current_weekdays() if is_current_week else get_next_weekdays()
+    results: List[ParsedMenuData] = []  # 모든 ParsedMenuData를 저장
 
-    menu_dict = fetch_and_refine_dodam(date)
-    logger.info(f"{date})의 도담식당의 메뉴는 {menu_dict}입니다.")
+    for date in weekdays:
+        whole_day_menu: ParsedMenuData = fetch_and_refine_dodam(date)
 
-    for restrant_name, menus in menu_dict.items():
-        if not menus:
+        if whole_day_menu.is_empty:
+            logger.warning(f'{date} 메뉴 전체가 비어있음')
+            results.append(whole_day_menu)
             continue
-        if "중식" in restrant_name:
-            post_dodam_lunch(date, menus)
-            post_dodam_lunch(date, menus,is_dev=True)  # prod 서버에 post
-        elif "석식" in restrant_name:
-            post_dodam_dinner(date, menus)
-            post_dodam_lunch(date,menus,is_dev=True)  # prod 서버에 post
-        else:
-            logger.error(f"중식과 석식이 아닌 메뉴가 존재합니다. {restrant_name}이라는 메뉴가 추가된 듯합니다.")
-            raise Exception
 
-    return {
-        'statusCode': 200,
-        'body': json.dumps(menu_dict, ensure_ascii=False).encode('utf-8')
-    }
+        for restaurant_name, menus in whole_day_menu.menus.items():
+            try:
+                if not menus:
+                    logger.warning(f'{date}_{restaurant_name}은 메뉴 없음')
+                    continue
+
+                if "중식" in restaurant_name:
+                    logger.info(f'{date}_{restaurant_name} (중식): {menus}')
+                    res = post_dodam_lunch(date, menus, is_dev=True)
+                    res.raise_for_status()
+                elif "석식" in restaurant_name:
+                    logger.info(f'{date}_{restaurant_name} (석식): {menus}')
+                    res = post_dodam_dinner(date, menus, is_dev=True)
+                    res.raise_for_status()
+                else:
+                    raise Exception(f'이상한 식당 이름: {restaurant_name}')
+
+            except Exception as e:
+                logger.exception(f'{date}_{restaurant_name} 전송 오류: {e}')
+                whole_day_menu.add_error(restaurant_name, str(e))  # 에러 기록
+                continue
+
+        results.append(whole_day_menu)
+
+    [send_slack_message(result) for result in results]
+    create_github_summary(results)
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2), reraise=True)
@@ -72,41 +88,17 @@ def get_dodam_from_soongguri(date):
     return response
 
 
-def fetch_and_refine_dodam(date: str):
+def fetch_and_refine_dodam(date: str) -> ParsedMenuData:
     response: requests.Response = get_dodam_from_soongguri(date)
 
     check_for_holidays(response, date)
 
-    menu_nm_dict = parse_table_to_dict(response)
-    string_refined_dict = strip_string_from_html(menu_nm_dict)
-    gpt_menu_dict = chat_with_gpt_dodam(string_refined_dict)
+    raw_menu: RawMenuData = parse_raw_menu_text_from_html(response, restaurant="DODAM", date=date)
 
-    return gpt_menu_dict
+    parsed_menu_data: ParsedMenuData = extract_main_dishes_gpt(raw_menu)
+
+    return parsed_menu_data
 
 
-# 재시도 조건 설정: 최대 3회 시도, 각 시도 사이에 5초 대기
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
-def chat_with_gpt_dodam(today_menu_dict) -> dict:
-    client = OpenAI(api_key=ENCRYPTED)
-    setup_messages = [
-        {"role": "system",
-         "content": "너는 메인메뉴와 사이드메뉴를 구분하는 함수의 역할을 맡았다. input값에서 메인 메뉴와 사이드 메뉴를 구분해야해. list에는 input값에서의 메인 메뉴만 골라낸 요소들의 이름이 들어가. 만약 동일한 메인메뉴가 있다면 한 개만 리스트에 넣어. 메뉴 앞의 특수문자는 제외해. 그외에 부가적인 설명은 하지 않고 오직 json을 반환해."},
-        {"role": "user", "content": f"input은 바로 이거야. 여기서 메뉴를 골라내어 배열을 만들고 반환해줘.:{dodam_lunch_1}"},
-        {"role": "assistant", "content": '["오꼬노미돈까스","웨지감자튀김*케찹"]'},
-
-    ]
-
-    for key, value in today_menu_dict.items():
-        setup_messages.append({"role": "user", "content": f"input은 바로 이거야. 여기서 메인메뉴만을 골라내어 list을 반환해줘.:{value}"})
-
-        response = client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
-            messages=setup_messages,
-            # response_format=MenuExtraction,
-        )
-        response_menus: list = json.loads(response.choices[0].message.content)
-        refined_menus: list = [re.sub(r'[\*]+(?=[\uAC00-\uD7A3])', '', menu) for menu in response_menus]
-        today_menu_dict[key] = refined_menus
-        setup_messages.pop()
-
-    return today_menu_dict
+if __name__ == '__main__':
+    schedule_dodam(manual_dates=["20240318","20240319"])
