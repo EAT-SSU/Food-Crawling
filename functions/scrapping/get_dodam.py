@@ -12,7 +12,6 @@ from functions.common.utils import check_for_holidays, extract_main_dishes_gpt, 
     parse_raw_menu_text_from_html, create_github_summary, send_slack_message, get_current_weekdays
 
 logger = logging.getLogger()
-logger.setLevel(logging.INFO)
 
 
 def schedule_dodam(is_current_week: bool = False, manual_dates: Optional[List[str]] = None):
