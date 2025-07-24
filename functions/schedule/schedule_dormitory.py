@@ -1,14 +1,15 @@
-import json
 import datetime
+import json
 
 import requests
-from tenacity import retry,stop_after_attempt,wait_fixed
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 from functions.common.constant import SLACK_WEBHOOK_URL, DORMITORY_LAMBDA_BASE_URL
 
 
 def lambda_handler(event, context):
-    # TODO implement
+    from logging import getLogger
+    logger = getLogger(context.function_name)
 
     if event.get("date") is not None:
         date = event["date"]

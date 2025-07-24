@@ -1,0 +1,227 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: Food Scraper Serverless Application
+
+Parameters:
+  SlackWebhookUrl:
+    Type: String
+    Description: Slack webhook URL for notifications
+    NoEcho: true
+
+  GptApiKey:
+    Type: String
+    Description: OpenAI GPT API key
+    NoEcho: true
+
+  ApiBaseUrl:
+    Type: String
+    Description: API base URL
+
+  DevApiBaseUrl:
+    Type: String
+    Description: Dev API base URL
+
+  DodamLambdaBaseUrl:
+    Type: String
+    Description: Dodam Lambda base URL
+
+  HaksikLambdaBaseUrl:
+    Type: String
+    Description: Haksik Lambda base URL
+
+  DormitoryLambdaBaseUrl:
+    Type: String
+    Description: Dormitory Lambda base URL
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 60
+    MemorySize: 128
+    Environment:
+      Variables:
+        SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
+        GPT_API_KEY: !Ref GptApiKey
+        API_BASE_URL: !Ref ApiBaseUrl
+        DEV_API_BASE_URL: !Ref DevApiBaseUrl
+        DODAM_LAMBDA_BASE_URL: !Ref DodamLambdaBaseUrl
+        HAKSIK_LAMBDA_BASE_URL: !Ref HaksikLambdaBaseUrl
+        DORMITORY_LAMBDA_BASE_URL: !Ref DormitoryLambdaBaseUrl
+    Layers:
+      - !Ref PythonRequirementsLayer
+
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,OPTIONS'"
+      AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+      AllowOrigin: "'*'"
+
+Resources:
+  # Lambda Layer for Python Requirements
+  PythonRequirementsLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: PythonRequirements
+      Description: Common libraries for Lambda functions
+      ContentUri: python-requirements-layer/
+      CompatibleRuntimes:
+        - python3.11
+      RetentionPolicy: Retain
+
+  # Lambda Execution Role
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LambdaInvokePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                  - states:StartExecution
+                Resource: "*"
+
+  # Schedule Haksik Function
+  ScheduleHaksikFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/schedule/
+      Handler: schedule_haksik.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        WeeklySchedule:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 16 ? * 1 *)
+            ScheduleExpressionTimezone: Asia/Seoul
+        HttpApi:
+          Type: Api
+          Properties:
+            Path: /schedule_haksik
+            Method: GET
+
+  # Get Haksik Function
+  GetHaksikFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/scrapping/
+      Handler: get_haksik.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        HttpApi:
+          Type: Api
+          Properties:
+            Path: /haksik
+            Method: GET
+
+  # Schedule Dodam Function
+  ScheduleDodamFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/schedule/
+      Handler: schedule_dodam.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        WeeklySchedule:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 16 ? * 1 *)
+            ScheduleExpressionTimezone: Asia/Seoul
+        HttpApi:
+          Type: Api
+          Properties:
+            Path: /schedule_dodam
+            Method: GET
+
+  # Get Dodam Function
+  GetDodamFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/scrapping/
+      Handler: get_dodam.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        HttpApi:
+          Type: Api
+          Properties:
+            Path: /dodam
+            Method: GET
+
+  # Schedule Dormitory Function
+  ScheduleDormitoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/schedule/
+      Handler: schedule_dormitory.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        WeeklySchedule:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 8 ? * 2 *)
+            ScheduleExpressionTimezone: Asia/Seoul
+        HttpApi:
+          Type: Api
+          Properties:
+            Path: /schedule_dormitory
+            Method: GET
+
+  # Get Dormitory Function
+  GetDormitoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/scrapping/
+      Handler: get_dormitory.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Layers:
+        - arn:aws:lambda:ap-northeast-2:336392948345:layer:AWSSDKPandas-Python311:22
+        - !Ref PythonRequirementsLayer
+      Events:
+        HttpApi:
+          Type: Api
+          Properties:
+            Path: /dormitory
+            Method: GET
+
+Outputs:
+  ApiGatewayEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiEndpoint"
+
+  ScheduleHaksikFunctionArn:
+    Description: Schedule Haksik Lambda Function ARN
+    Value: !GetAtt ScheduleHaksikFunction.Arn
+
+  GetHaksikFunctionArn:
+    Description: Get Haksik Lambda Function ARN
+    Value: !GetAtt GetHaksikFunction.Arn
+
+  ScheduleDodamFunctionArn:
+    Description: Schedule Dodam Lambda Function ARN
+    Value: !GetAtt ScheduleDodamFunction.Arn
+
+  GetDodamFunctionArn:
+    Description: Get Dodam Lambda Function ARN
+    Value: !GetAtt GetDodamFunction.Arn
+
+  ScheduleDormitoryFunctionArn:
+    Description: Schedule Dormitory Lambda Function ARN
+    Value: !GetAtt ScheduleDormitoryFunction.Arn
+
+  GetDormitoryFunctionArn:
+    Description: Get Dormitory Lambda Function ARN
+    Value: !GetAtt GetDormitoryFunction.Arn

@@ -1,17 +1,16 @@
-import json
-import requests
 import datetime
+import json
 from dataclasses import asdict
-
-import requests
-import pandas as pd
-from bs4 import BeautifulSoup
 from datetime import datetime
+
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_fixed
 
-from functions.common.utils import make2d, RequestBody
 from functions.common.constant import DORMITORY_LUNCH_PRICE, API_BASE_URL, DEV_API_BASE_URL
-from functions.schedule.schedule_dormitory import send_slack_message
+from functions.common.models import RequestBody
+from functions.common.utils import make2d
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2), reraise=True)
@@ -83,9 +82,9 @@ class Dormitory:
         df = pd.DataFrame(table)
         dt2 = df.rename(columns=df.iloc[0])
         dt3 = dt2.drop(dt2.index[0])
-        dt3["조식"] = dt3["조식"].str.split("\r\n")
-        dt3["중식"] = dt3["중식"].str.split("\r\n")
-        dt3["석식"] = dt3["석식"].str.split("\r\n")
+        dt3["조식"] = dt3["조식"].str.split("\r\n").apply(lambda x: [item.strip() for item in x if item.strip()])
+        dt3["중식"] = dt3["중식"].str.split("\r\n").apply(lambda x: [item.strip() for item in x if item.strip()])
+        dt3["석식"] = dt3["석식"].str.split("\r\n").apply(lambda x: [item.strip() for item in x if item.strip()])
         del dt3["중.석식"]
         dt3 = dt3.set_index('날짜')
         self.table = dt3
@@ -107,3 +106,6 @@ class Dormitory:
         self.get_table()
 
         return self.menu_list
+
+if __name__ == '__main__':
+    a = Dormitory(date='20250714').get_menu()

@@ -1,9 +1,11 @@
 import pytest
+
 from functions.scrapping.get_dormitory import Dormitory, get_time_of_day
 
 
 # Dormitory 클래스의 get_menu 메서드를 테스트합니다.
 
+@pytest.mark.unit
 def test_get_menu():
     dorm = Dormitory("20240325")
     menu = dorm.get_menu()
@@ -40,9 +42,11 @@ def test_get_menu():
                                                                        '배추김치', '계란후라이'] and menu[6][
                "date"] == "20240331" and menu[6]["menu"]["석식"] == ['떡국', '쌀밥', '브로컬리떡갈비', '찐만두&양념장', '고추지무침', '배추김치',
                                                                    '요구르트']
+@pytest.mark.unit
 def test_get_time_of_day():
     assert get_time_of_day("조식") == "MORNING" and get_time_of_day("중식") == "LUNCH" and get_time_of_day("석식") == "DINNER"
 
+@pytest.mark.unit
 def test_get_dormitory_from_ssudorm():
     dorm = Dormitory("20240325")
     response = dorm.get_dormitory_from_ssudorm()

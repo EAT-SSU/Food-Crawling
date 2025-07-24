@@ -5,7 +5,7 @@ from logging import getLogger
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_fixed
 
-from functions.common.constant import SLACK_WEBHOOK_URL, DODAM_LAMBDA_BASE_URL
+from functions.common.constant import SLACK_WEBHOOK_URL, FACULTY_LAMBDA_BASE_URL
 from functions.common.utils import get_next_weekdays, get_current_weekdays
 
 
@@ -33,7 +33,7 @@ async def main(weekdays: list):
 
     async with aiohttp.ClientSession() as session:
         # lambda invoke하는 부분
-        tasks = [invoke_dodam_lambda_request(session, date) for date in weekdays]
+        tasks = [invoke_faculty_lambda_request(session, date) for date in weekdays]
         responses = await asyncio.gather(*tasks)
 
         for date, response_data in zip(weekdays, responses):
@@ -51,7 +51,7 @@ async def send_slack_message(session, date, menu):
     payload = {
         "channel": "#api-notification",
         "username": "학식봇",
-        "text": f"도담식당({date})의 식단 {menu}",
+        "text": f"교직원식당({date})의 식단 {menu}",
         "icon_emoji": ":ghost:"
     }
     headers = {'Content-Type': 'application/json'}
@@ -60,8 +60,8 @@ async def send_slack_message(session, date, menu):
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-async def invoke_dodam_lambda_request(session, date):
-    async with session.get(url=DODAM_LAMBDA_BASE_URL, params={"date": date}) as response:
+async def invoke_faculty_lambda_request(session, date):
+    async with session.get(url=FACULTY_LAMBDA_BASE_URL, params={"date": date}) as response:
         response_text = await response.text()
         response_data = json.loads(response_text)
         return response_data

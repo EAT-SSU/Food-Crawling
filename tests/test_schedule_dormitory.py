@@ -1,9 +1,13 @@
 import json
 from datetime import datetime
 
-from functions.schedule.schedule_dormitory import send_slack_message
+import pytest
+
 from functions.scrapping.get_dormitory import Dormitory
 from functions.scrapping.get_dormitory import post_dormitory_menu
+
+
+@pytest.mark.integration
 def test_lambda_handler(event, context):
     weekly_dorm = Dormitory(event["queryStringParameters"]["date"])
     weekly_menu = weekly_dorm.get_menu()

@@ -1,0 +1,205 @@
+service: food-scrapper-serverless
+
+provider:
+  name: aws
+  runtime: python3.9
+  region: ap-northeast-2
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - lambda:InvokeFunction
+        - states:StartExecution
+      Resource: "*"
+  environment:
+    SLACK_WEBHOOK_URL: ${file(secrets.yml):SLACK_URL}
+    GPT_API_KEY: ${file(secrets.yml):GPT_API_KEY}
+    API_BASE_URL: ${file(secrets.yml):API_BASE_URL}
+    DEV_API_BASE_URL: ${file(secrets.yml):DEV_API_BASE_URL}
+    DODAM_LAMBDA_BASE_URL: ${file(secrets.yml):DODAM_LAMBDA_BASE_URL}
+    HAKSIK_LAMBDA_BASE_URL: ${file(secrets.yml):HAKSIK_LAMBDA_BASE_URL}
+    DORMITORY_LAMBDA_BASE_URL: ${file(secrets.yml):DORMITORY_LAMBDA_BASE_URL}
+
+layers:
+  PythonRequirements:
+    name: PythonRequirements
+    path: python-requirements-layer
+    description: "Common libraries for Lambda functions"
+    compatibleRuntimes:
+      - python3.9
+
+functions:
+  scheduleHaksik:
+    handler: functions.schedule.schedule_haksik.lambda_handler
+    layers:
+      - !Ref PythonRequirementsLambdaLayer
+    timeout: 60
+    events:
+      - schedule:
+          method: scheduler
+          rate:
+            - cron(0 16 ? * 1 *)
+          timezone: Asia/Seoul
+      - http:
+          path: schedule_haksik
+          method: get
+          cors: true
+          request:
+            parameters:
+              querystrings:
+                delayed_schedule: false
+
+  getHaksik:
+    handler: functions.scrapping.get_haksik.lambda_handler
+    layers:
+      - !Ref PythonRequirementsLambdaLayer
+    timeout: 60
+    events:
+      - http:
+          path: haksik
+          method: get
+          cors: true
+          request:
+            parameters:
+              querystrings:
+                date: true
+
+  scheduleDodam:
+    handler: functions.schedule.schedule_dodam.lambda_handler
+    layers:
+      - !Ref PythonRequirementsLambdaLayer
+    timeout: 60
+    events:
+      - schedule:
+          method: scheduler
+          rate:
+            - cron(0 16 ? * 1 *)
+          timezone: Asia/Seoul
+      - http:
+          path: schedule_dodam
+          method: get
+          cors: true
+          request:
+            parameters:
+              querystrings:
+                delayed_schedule: false
+
+  getDodam:
+    handler: functions.scrapping.get_dodam.lambda_handler
+    layers:
+      - !Ref PythonRequirementsLambdaLayer
+    timeout: 60
+    events:
+      - http:
+          path: dodam
+          method: get
+          cors: true
+          request:
+            parameters:
+              querystrings:
+                delayed_schedule: false
+
+
+  scheduleDormitory:
+    handler: functions.schedule.schedule_dormitory.lambda_handler
+    layers:
+      - !Ref PythonRequirementsLambdaLayer
+    timeout: 60
+    events:
+      - schedule:
+          method: scheduler
+          rate:
+            - cron(0 8 ? * 2 *)
+          timezone: Asia/Seoul
+      - http:
+          path: schedule_dormitory
+          method: get
+          cors: true
+          request:
+              parameters:
+                querystrings:
+                  date: true
+
+  getDormitory:
+    handler: functions.scrapping.get_dormitory.lambda_handler
+    layers:
+      - arn:aws:lambda:ap-northeast-2:336392948345:layer:AWSSDKPandas-Python39:21
+      - !Ref PythonRequirementsLambdaLayer
+    timeout: 60
+    events:
+      - http:
+          path: dormitory
+          method: get
+          cors: true
+          request:
+            parameters:
+              querystrings:
+                date: true
+
+#stepFunctions:
+#  stateMachines:
+#    HaksikStateMachine:
+#      name: HaksikStateMachine
+#      dependsOn:
+#        - GetHaksikLambdaFunction
+#      definition:
+#        Comment: "Get haksik menu and notify to Slack"
+#        StartAt: ScheduleHaksik
+#        States:
+#          ScheduleHaksik:
+#            Type: Task
+#            Resource: !GetAtt ScheduleHaksikLambdaFunction.Arn
+#            Next: GetHaksik
+#          GetHaksik:
+#            Type: Task
+#            Resource: !GetAtt GetHaksikLambdaFunction.Arn
+#            End: true
+#
+#    DodamStateMachine:
+#      name: DodamStateMachine
+#      dependsOn:
+#        - GetDodamLambdaFunction
+#      definition:
+#        Comment: "Get dodam menu and notify to Slack"
+#        StartAt: ScheduleDodam
+#        States:
+#          ScheduleDodam:
+#            Type: Task
+#            Resource: !GetAtt ScheduleDodamLambdaFunction.Arn
+#            Next: GetDodam
+#          GetDodam:
+#            Type: Task
+#            Resource: !GetAtt GetDodamLambdaFunction.Arn
+#            End: true
+#
+#    DormitoryStateMachine:
+#      name: DormitoryStateMachine
+#      dependsOn:
+#        - GetDormitoryLambdaFunction
+#      definition:
+#        Comment: "Get dormitory menu and notify to Slack"
+#        StartAt: ScheduleDormitory
+#        States:
+#          ScheduleDormitory:
+#            Type: Task
+#            Resource: !GetAtt ScheduleDormitoryLambdaFunction.Arn
+#            Next: GetDormitory
+#          GetDormitory:
+#            Type: Task
+#            Resource: !GetAtt GetDormitoryLambdaFunction.Arn
+#            End: true
+package:
+  exclude:
+    - tests/**
+    - README.md
+    - .git/**
+    - .serverless/**
+    - python-requirements-layer/**
+
+plugins:
+  - serverless-step-functions
+  - serverless-offline
+  - serverless-python-requirements
+custom:
+  pythonRequirements:
+    dockerizePip: true  # 리눅스 호환 패키지를 설치하기 위해 Docker 사용
+    layer: true  # 패키지를 Lambda Layer로 설치
