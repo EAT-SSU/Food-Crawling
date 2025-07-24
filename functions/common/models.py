@@ -1,16 +1,99 @@
-# models.py
-from typing import Literal
-
-# 리터럴 타입 정의
-RestaurantType = Literal["도담식당", "학생식당", "기숙사식당"]
-TimeSlotPrefix = Literal["중식", "석식"]
-StatusType = Literal["success", "error"]
-
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Any
+from enum import Enum
+from typing import Dict, List, Any, Optional, Union
 
-# 식당 타입 정의
-RestaurantType = Literal["도담식당", "학생식당", "기숙사식당"]
+
+class RestaurantType(Enum):
+    HAKSIK = ("학생식당", "HAKSIK", 1)
+    DODAM = ("도담식당", "DODAM", 2)
+    FACULTY = ("교직원식당", "FACULTY", 7)
+    DORMITORY = ("기숙사식당","DORMITORY", None)  # 숭실대 생협 API에 없음
+
+    def __init__(self, korean_name: str, english_name: str, soongguri_rcd: Optional[int]):
+        self.korean_name = korean_name
+        self.english_name = english_name
+        self.soongguri_rcd = soongguri_rcd
+
+    @property
+    def lambda_base_url(self) -> str:
+        """AWS Lambda 기본 URL"""
+        url_map = {
+            RestaurantType.DODAM: os.getenv("DODAM_LAMBDA_BASE_URL"),
+            RestaurantType.STUDENT: os.getenv("HAKSIK_LAMBDA_BASE_URL"),
+            RestaurantType.FACULTY: os.getenv("FACULTY_LAMBDA_BASE_URL"),
+            RestaurantType.DORMITORY: os.getenv("DORMITORY_LAMBDA_BASE_URL"),
+        }
+        return url_map[self]
+
+    @classmethod
+    def parse(cls, value: Union[str, int]) -> 'RestaurantType':
+        """어떤 형태든 파싱"""
+        if isinstance(value, int):
+            for restaurant in cls:
+                if restaurant.code == value:
+                    return restaurant
+
+        if isinstance(value, str):
+            if value.isdigit():
+                return cls.parse(int(value))
+
+            for restaurant in cls:
+                if (restaurant.english_name.upper() == value.upper() or
+                        restaurant.korean_name == value):
+                    return restaurant
+
+        raise ValueError(f"Unknown restaurant: {value}")
+
+
+class TimeSlot(Enum):
+    ONE_DOLLAR_MORNING = ("1000원 조식", "1M", "ONE_DOLLAR_MORNING")  # 학생식당 전용
+    LUNCH = ("점심", "L", "LUNCH")
+    DINNER = ("저녁", "D", "DINNER")
+
+    def __init__(self, korean_name: str, code: str, english_name: str):
+        self.korean_name = korean_name
+        self.code = code
+        self.english_name = english_name
+
+    @classmethod
+    def parse(cls, value: str) -> 'TimeSlot':
+        for slot in cls:
+            if value in [slot.korean_name, slot.code, slot.english_name]:
+                return slot
+        raise ValueError(f"Unknown time slot: {value}")
+
+
+class MenuPricing:
+    """메뉴 가격 관리"""
+
+    PRICES: Dict[RestaurantType, Dict[TimeSlot, int]] = {
+        RestaurantType.DODAM: {
+            TimeSlot.LUNCH: 6000,
+            TimeSlot.DINNER: 6000,
+        },
+        RestaurantType.HAKSIK: {
+            TimeSlot.ONE_DOLLAR_MORNING: 1000,
+            TimeSlot.LUNCH: 5000,
+            TimeSlot.DINNER: 5000,
+        },
+        RestaurantType.FACULTY: {
+            TimeSlot.LUNCH: 7000,
+        },
+        RestaurantType.DORMITORY: {
+            TimeSlot.LUNCH: 5500,
+            TimeSlot.DINNER: 5500,
+        },
+    }
+
+    @classmethod
+    def get_price(cls, restaurant: RestaurantType, time_slot: TimeSlot) -> Optional[int]:
+        """특정 식당의 특정 시간대 가격 반환"""
+        return cls.PRICES.get(restaurant, {}).get(time_slot)
+
+    @classmethod
+    def get_available_times(cls, restaurant: RestaurantType) -> list[TimeSlot]:
+        """특정 식당에서 이용 가능한 시간대 반환"""
+        return list(cls.PRICES.get(restaurant, {}).keys())
 
 
 @dataclass
@@ -72,8 +155,8 @@ class ParsedMenuData:
         # 하나라도 오류가 있으면 전체 성공 상태 업데이트
         self.success = False
 
+
 @dataclass
 class RequestBody:
     price: int
     menuNames: List[str] = field(default_factory=list)
-

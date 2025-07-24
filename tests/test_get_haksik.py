@@ -1,6 +1,9 @@
 import pytest
+
 from functions.scrapping.get_haksik import fetch_and_refine_haksik, get_haksik_from_soongguri, post_haksik_lunch
 
+
+@pytest.mark.unit
 def test_fetch_and_refine_haksik():
     menu: dict = fetch_and_refine_haksik("20240325")
 
@@ -12,14 +15,13 @@ def test_fetch_and_refine_haksik():
            "함박스테이크&파인애플볶음밥" in menu["중식3"] and \
            '얼큰콩나물국 & 닭살데리야끼볶음' in menu["석식1"]  # '["석식1"]'이 아니라 'menu["석식1"]'로 수정
 
+@pytest.mark.unit
 def test_get_haksik_from_soongguri():
     response = get_haksik_from_soongguri("20240325")
     assert response.status_code == 200
 
+@pytest.mark.unit
 def test_post_haksik_lunch():
     response = post_haksik_lunch("20240325", ["꼬치어묵우동", "칠리탕수육"])
 
     assert response.status_code == 200
-
-if __name__ == '__main__':
-    menu: dict = fetch_and_refine_haksik("20240913")

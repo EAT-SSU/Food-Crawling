@@ -1,22 +1,41 @@
-[tool.poetry]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
 name = "food-crawling"
 version = "0.1.0"
 description = ""
-authors = ["rover0811 <rover0811@hotmail.com>"]
+authors = [
+    {name = "rover0811", email = "rover0811@hotmail.com"}
+]
 readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "openai>=1.47.0",
+    "requests>=2.32.3",
+    "bs4>=0.0.2",
+    "tenacity>=9.0.0",
+    "pytz>=2024.2",
+    "pandas>=2.3.1",
+    "aiohttp>=3.12.14",
+]
 
-[tool.poetry.dependencies]
-python = "^3.9"
-openai = "^1.47.0"
-requests = "^2.32.3"
-bs4 = "^0.0.2"
-tenacity = "^9.0.0"
-pytz = "^2024.2"
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.3",
+]
 
+[tool.hatch.build.targets.wheel]
+packages = ["functions"]
 
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.3.3"
+[tool.pytest.ini_options]
+markers = [
+    "unit: mark a test as a unit test.",
+    "integration: mark a test as an integration test.",
+]
 
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+]
