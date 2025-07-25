@@ -4,7 +4,7 @@ from dataclasses import asdict
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_fixed
 
-from functions.shared.models.menu import RequestBody, RestaurantType, TimeSlot
+from functions.shared.models.model import RequestBody, RestaurantType, TimeSlot
 from functions.shared.repositories.interfaces import APIClientInterface
 
 logger = logging.getLogger(__name__)
@@ -26,8 +26,8 @@ class SpringAPIClient(APIClientInterface):
             form_data = asdict(RequestBody(price=price, menuNames=menus))
             params = {
                 "date": date,
-                "restaurant": restaurant,
-                "time": time_slot
+                "restaurant": restaurant.english_name,
+                "time": time_slot.english_name
             }
 
             async with aiohttp.ClientSession() as session:

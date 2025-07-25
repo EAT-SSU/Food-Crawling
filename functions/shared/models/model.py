@@ -29,21 +29,12 @@ class RestaurantType(Enum):
 
 
 class TimeSlot(Enum):
-    ONE_DOLLAR_MORNING = ("1000원 조식", "1M", "ONE_DOLLAR_MORNING")  # 학생식당 전용
-    LUNCH = ("점심", "L", "LUNCH")
-    DINNER = ("저녁", "D", "DINNER")
+    ONE_DOLLAR_MORNING = "MORNING"  # 학생식당 전용
+    LUNCH = "LUNCH"
+    DINNER = "DINNER"
 
-    def __init__(self, korean_name: str, code: str, english_name: str):
-        self.korean_name = korean_name
-        self.code = code
+    def __init__(self, english_name: str):
         self.english_name = english_name
-
-    @classmethod
-    def parse(cls, value: str) -> 'TimeSlot':
-        for slot in cls:
-            if value in [slot.korean_name, slot.code, slot.english_name]:
-                return slot
-        raise ValueError(f"Unknown time slot: {value}")
 
 
 class MenuPricing:
@@ -93,6 +84,7 @@ class ParsedMenuData:
     date: str
     restaurant: RestaurantType
     menus: Dict[str, List[str]]  # 키: 메뉴 슬롯, 값: 메뉴 항목 리스트
+    success: bool = True
     error_slots: Dict[str, str] = field(default_factory=dict)  # 키: 실패한 슬롯, 값: 오류 메시지
 
     def get_successful_slots(self) -> List[str]:

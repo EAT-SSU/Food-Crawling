@@ -3,7 +3,7 @@ import logging
 from typing import Optional, List
 
 from functions.config.dependencies import DependencyContainer
-from functions.shared.models.menu import RestaurantType, TimeSlot, MenuPricing, ParsedMenuData
+from functions.shared.models.model import RestaurantType, TimeSlot, MenuPricing, ParsedMenuData
 from functions.shared.repositories.clients.spring_api_client import SpringAPIClient
 from functions.shared.services.time_slot_strategy import TimeSlotStrategyFactory
 
@@ -17,7 +17,7 @@ class ScrapingService:
         self._container: DependencyContainer = container
 
     async def scrape_and_process(self, date: str, restaurant_type: RestaurantType,
-                                 is_dev: bool = False) -> ParsedMenuData:
+                                 is_dev: bool = True) -> ParsedMenuData:
         """메뉴 스크래핑부터 API 전송까지 전체 프로세스를 처리합니다."""
         logger.info(f"메뉴 처리 시작: {restaurant_type.korean_name} {date}, 개발모드: {is_dev}")
 
@@ -41,10 +41,41 @@ class ScrapingService:
 
         return parsed_menu
 
+    async def scrape_and_process_dormitory(self, date: str, is_dev: bool = True) -> List[ParsedMenuData]:
+        """기숙사식당 전용 메뉴 스크래핑 (주간 처리)"""
+        logger.info(f"기숙사식당 주간 메뉴 처리 시작: {date}, 개발모드: {is_dev}")
+
+        # 1. 의존성 주입
+        scraper = self._container.get_scraper(RestaurantType.DORMITORY)
+        parser = self._container.get_parser()
+
+        # 2. 스크래핑 (List[RawMenuData] 반환)
+        raw_menus = await scraper.scrape_menu(date)
+        logger.info(f"기숙사 스크래핑 완료: {len(raw_menus)}일치 메뉴")
+
+        # 3. 각 RawMenuData를 GPT로 파싱
+        parsed_menus = []
+        for raw_menu in raw_menus:
+            logger.info(f"GPT 파싱 시작: {raw_menu.date}")
+
+            parsed_menu = await parser.parse_menu(raw_menu)
+            logger.info(f"GPT 파싱 완료: {raw_menu.date}")
+
+            # 4. API 전송
+            await self._send_menus_to_api(parsed_menu, is_dev)
+
+            # 5. 결과 로깅
+            self._log_processing_result(parsed_menu)
+
+            parsed_menus.append(parsed_menu)
+
+        logger.info(f"기숙사식당 주간 메뉴 처리 완료: {len(parsed_menus)}일치")
+        return parsed_menus
+
     async def _send_menus_to_api(self, parsed_menu: ParsedMenuData, is_dev: bool) -> None:
         """파싱된 메뉴를 API에 전송합니다. (성공한 것만)"""
         clients: List[SpringAPIClient] = [self._container.get_dev_api_client()]
-        if not is_dev: # 운영 환경
+        if not is_dev:  # 운영 환경
             clients.append(self._container.get_prod_api_client())
 
         restaurant, date = parsed_menu.restaurant, parsed_menu.date

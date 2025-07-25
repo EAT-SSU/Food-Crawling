@@ -4,7 +4,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 
 from functions.shared.models.exceptions import HolidayException, MenuFetchException
-from functions.shared.models.menu import RawMenuData, RestaurantType
+from functions.shared.models.model import RawMenuData, RestaurantType
 from functions.shared.repositories.interfaces import MenuScraperInterface
 from functions.shared.utils.parsing_utils import parse_table_to_dict, strip_string_from_html
 

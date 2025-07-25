@@ -6,7 +6,7 @@ from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 from functions.config.settings import Settings
-from functions.shared.models.menu import RawMenuData, ParsedMenuData
+from functions.shared.models.model import RawMenuData, ParsedMenuData
 from functions.shared.repositories.interfaces import MenuParserInterface
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ class GPTClient(MenuParserInterface):
             restaurant=raw_menu.restaurant,
             menus=result_dict,
             error_slots=errors,
-            success=is_successful
+            success=len(errors) == 0  # success 필드 추가
         )
 
         if is_successful:
