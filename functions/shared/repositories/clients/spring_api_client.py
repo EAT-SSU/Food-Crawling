@@ -4,7 +4,7 @@ from dataclasses import asdict
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_fixed
 
-from functions.shared.models.menu import RequestBody
+from functions.shared.models.menu import RequestBody, RestaurantType, TimeSlot
 from functions.shared.repositories.interfaces import APIClientInterface
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ class SpringAPIClient(APIClientInterface):
         self.base_url = base_url
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-    async def post_menu(self, date: str, restaurant: str, time_slot: str,
+    async def post_menu(self, date: str, restaurant: RestaurantType, time_slot: TimeSlot,
                         menus: list, price: int) -> bool:
         """메뉴를 Spring API에 전송합니다."""
         logger.info(f"Spring API 메뉴 전송: {restaurant} {time_slot} {date}")
