@@ -1,14 +1,15 @@
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict, List, Any, Optional
 
 
 class RestaurantType(Enum):
     HAKSIK = ("학생식당", "HAKSIK", 1)
     DODAM = ("도담식당", "DODAM", 2)
     FACULTY = ("교직원식당", "FACULTY", 7)
-    DORMITORY = ("기숙사식당","DORMITORY", None)  # 숭실대 생협 API에 없음
+    DORMITORY = ("기숙사식당", "DORMITORY", None)  # 숭실대 생협 API에 없음
 
     def __init__(self, korean_name: str, english_name: str, soongguri_rcd: Optional[int]):
         self.korean_name = korean_name
@@ -73,7 +74,7 @@ class MenuPricing:
         return cls.PRICES.get(restaurant, {}).get(time_slot)
 
     @classmethod
-    def get_available_times(cls, restaurant: RestaurantType) -> list[TimeSlot]:
+    def get_available_times(cls, restaurant: RestaurantType) -> List[TimeSlot]:
         """특정 식당에서 이용 가능한 시간대 반환"""
         return list(cls.PRICES.get(restaurant, {}).keys())
 
@@ -86,86 +87,73 @@ class RawMenuData:
     menu_texts: Dict[str, str]  # 키: 메뉴 슬롯(ex: '중식1'), 값: 텍스트 내용
 
 
-import json
-from dataclasses import dataclass, field
-from typing import Dict, List, Any
-
-
 @dataclass
 class ParsedMenuData:
-    """GPT로 파싱된 메뉴 데이터"""
+    """GPT로 파싱된 메뉴 데이터 - 순수 데이터 + 자체 분석 메서드"""
     date: str
     restaurant: RestaurantType
-    menus: Dict[str, List[str]]  # 키: 메뉴 슬롯(ex: '중식1'), 값: 메뉴 항목 리스트
-    success: bool = True
+    menus: Dict[str, List[str]]  # 키: 메뉴 슬롯, 값: 메뉴 항목 리스트
     error_slots: Dict[str, str] = field(default_factory=dict)  # 키: 실패한 슬롯, 값: 오류 메시지
 
-    @property
-    def is_empty(self) -> bool:
-        """메뉴가 모두 비어있는지 확인"""
-        return all(not menu_items for menu_items in self.menus.values())
+    def get_successful_slots(self) -> List[str]:
+        """성공적으로 파싱된 슬롯 목록 (GPT에서 오류도 안나고 value가 빈칸이 아닌 것들)"""
+        return [slot for slot in self.menus.keys() if slot not in self.error_slots and self.menus[slot]]
 
-    @property
-    def successful_slots(self) -> List[str]:
-        """성공적으로 파싱된 슬롯 목록"""
-        return [slot for slot in self.menus.keys() if slot not in self.error_slots]
-
-    @property
-    def all_slots(self) -> List[str]:
+    def get_all_slots(self) -> List[str]:
         """모든 슬롯 목록"""
         return list(self.menus.keys())
 
-    def get_slot_status(self, slot: str) -> Dict[str, Any]:
-        """특정 슬롯의 파싱 상태 정보"""
-        if slot not in self.menus:
-            return {"exists": False}
+    def is_complete_success(self) -> bool:
+        """완전 성공인지 확인"""
+        return len(self.error_slots) == 0 and bool(self.menus)
 
-        return {
-            "exists": True,
-            "success": slot not in self.error_slots,
-            "menu_items": self.menus.get(slot, []),
-            "error": self.error_slots.get(slot)
-        }
+    def is_partial_success(self) -> bool:
+        """부분 성공인지 확인"""
+        successful = self.get_successful_slots()
+        total = len(self.menus)
+        return 0 < len(successful) < total
 
-    def add_menu_items(self, slot: str, items: List[str]) -> None:
-        """슬롯에 메뉴 항목 추가 (파싱 성공 시)"""
-        self.menus[slot] = items
-        # 이전에 오류가 있었다면 제거
-        if slot in self.error_slots:
-            del self.error_slots[slot]
 
-    def add_error(self, slot: str, error_message: str) -> None:
-        """슬롯 파싱 실패 시 오류 추가"""
-        self.error_slots[slot] = error_message
-        # 메뉴 항목은 빈 리스트로 설정
-        self.menus[slot] = []
-        # 하나라도 오류가 있으면 전체 성공 상태 업데이트
-        self.success = False
+@dataclass
+class RequestBody:
+    """API 요청 바디"""
+    price: int
+    menuNames: List[str] = field(default_factory=list)
 
-    def to_lambda_response(self, status_code: int = None, message: str = None,
-                           special_note: str = None) -> Dict[str, Any]:
-        """Lambda 응답 형태로 변환"""
+
+class ResponseBuilder:
+    """Lambda 응답 생성 전용"""
+
+    @staticmethod
+    def create_success_response(parsed_menu: ParsedMenuData,
+                                status_code: Optional[int] = None,
+                                message: Optional[str] = None,
+                                special_note: Optional[str] = None) -> Dict[str, Any]:
+        """성공 응답 생성"""
+        is_success = parsed_menu.is_complete_success()
+
         if status_code is None:
-            status_code = 200 if self.success else 400
+            status_code = 200 if is_success else 400
 
         return {
             'statusCode': status_code,
             'headers': {'Content-Type': 'application/json; charset=utf-8'},
             'body': json.dumps({
-                'success': self.success,
-                'date': self.date,
-                'restaurant': self.restaurant.korean_name,
-                'menus': self.menus,
-                'parsing_errors': self.error_slots if self.error_slots else None,
-                'message': message or f"{self.restaurant.korean_name} 메뉴 처리 완료",
+                'success': is_success,
+                'date': parsed_menu.date,
+                'restaurant': parsed_menu.restaurant.korean_name,
+                'menus': parsed_menu.menus,
+                'parsing_errors': parsed_menu.error_slots if parsed_menu.error_slots else None,
+                'message': message or f"{parsed_menu.restaurant.korean_name} 메뉴 처리 완료",
                 'special_note': special_note
             }, ensure_ascii=False)
         }
 
-    @classmethod
-    def error_response(cls, date: str, restaurant: RestaurantType, error: Exception,
-                       status_code: int = 400, message: str = None) -> Dict[str, Any]:
-        """에러 응답 생성 (클래스 메서드)"""
+    @staticmethod
+    def create_error_response(date: str, restaurant: RestaurantType,
+                              error: Exception, status_code: int = 400,
+                              message: Optional[str] = None) -> Dict[str, Any]:
+        """에러 응답 생성"""
         return {
             'statusCode': status_code,
             'headers': {'Content-Type': 'application/json; charset=utf-8'},
@@ -176,13 +164,7 @@ class ParsedMenuData:
                 'menus': {},
                 'parsing_errors': None,
                 'message': message or f"{restaurant.korean_name if restaurant else 'Unknown'} 메뉴 처리 실패",
-                'error': str(error),
-                'error_type': type(error).__name__
+                'error': str(error) if error else "Unknown error",
+                'error_type': type(error).__name__ if error else "UnknownError"
             }, ensure_ascii=False)
         }
-
-
-@dataclass
-class RequestBody:
-    price: int
-    menuNames: List[str] = field(default_factory=list)
