@@ -4,7 +4,7 @@ import logging
 from functions.shared.models.exceptions import (
     HolidayException, MenuFetchException, MenuParseException, WeirdRestaurantName
 )
-from functions.shared.models.menu import RestaurantType, ParsedMenuData
+from functions.shared.models.model import RestaurantType, ParsedMenuData, ResponseBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ def dodam_view(event, context):
         container = get_container()
         scraping_service = container.get_scraping_service()
 
-        parsed_menu = asyncio.run(scraping_service.scrape_and_process(date, RestaurantType.DODAM))
+        parsed_menu:ParsedMenuData = asyncio.run(scraping_service.scrape_and_process(date, RestaurantType.DODAM))
 
         # 3. 알림 전송
         notification_service = container.get_notification_service()
@@ -33,8 +33,9 @@ def dodam_view(event, context):
 
         logger.info(f"도담식당 메뉴 처리 완료: {date}")
 
-        # 4. ParsedMenuData에서 직접 응답 생성
-        return parsed_menu.to_lambda_response(
+        # 4. ResponseBuilder를 사용하여 응답 생성
+        return ResponseBuilder.create_success_response(
+            parsed_menu,
             message=f"{RestaurantType.DODAM.korean_name} 메뉴 처리 완료"
         )
 
@@ -50,8 +51,8 @@ def dodam_view(event, context):
         except Exception as slack_error:
             logger.error(f"Slack 에러 알림 전송 실패: {slack_error}")
 
-        # ParsedMenuData의 클래스 메서드로 에러 응답 생성
-        return ParsedMenuData.error_response(
+        # ResponseBuilder로 에러 응답 생성
+        return ResponseBuilder.create_error_response(
             date=date or "unknown",
             restaurant=RestaurantType.DODAM,
             error=e,
@@ -59,7 +60,7 @@ def dodam_view(event, context):
         )
 
     except Exception as e:
-        logger.error(f"도담식당 시스템 오료: {e}", exc_info=True)
+        logger.error(f"도담식당 시스템 오류: {e}", exc_info=True)
 
         # Slack 에러 알림
         try:
@@ -70,7 +71,7 @@ def dodam_view(event, context):
         except Exception as error:
             logger.error(f"Slack 에러 알림 전송 실패: {error}")
 
-        return ParsedMenuData.error_response(
+        return ResponseBuilder.create_error_response(
             date=date or "unknown",
             restaurant=RestaurantType.DODAM,
             error=Exception("Internal server error"),

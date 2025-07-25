@@ -4,7 +4,7 @@ import logging
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_fixed
 
-from functions.shared.models.menu import ParsedMenuData
+from functions.shared.models.model import ParsedMenuData
 from functions.shared.repositories.interfaces import NotificationClientInterface
 
 logger = logging.getLogger(__name__)

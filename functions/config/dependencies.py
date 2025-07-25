@@ -1,5 +1,5 @@
 from functions.config.settings import Settings
-from functions.shared.models.menu import RestaurantType
+from functions.shared.models.model import RestaurantType
 
 
 class DependencyContainer:

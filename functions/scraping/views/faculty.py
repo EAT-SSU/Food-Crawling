@@ -1,11 +1,10 @@
 import asyncio
-import json
 import logging
 
 from functions.shared.models.exceptions import (
     HolidayException, MenuFetchException, MenuParseException, WeirdRestaurantName
 )
-from functions.shared.models.menu import RestaurantType, ParsedMenuData
+from functions.shared.models.model import RestaurantType, ResponseBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +17,6 @@ def faculty_view(event, context):
         # 1. 파라미터 추출 및 검증
         query_params = event.get("queryStringParameters") or {}
         date = query_params.get("date")
-
-        if not date:
-            return {
-                'statusCode': 400,
-                'headers': {'Content-Type': 'application/json; charset=utf-8'},
-                'body': json.dumps({'error': 'date parameter is required'}, ensure_ascii=False)
-            }
 
         logger.info(f"교직원식당 메뉴 요청: {date}")
 
@@ -41,8 +33,9 @@ def faculty_view(event, context):
 
         logger.info(f"교직원식당 메뉴 처리 완료: {date}")
 
-        # 4. ParsedMenuData에서 직접 응답 생성 (교직원식당 특수 노트 포함)
-        return parsed_menu.to_lambda_response(
+        # 4. ResponseBuilder를 사용하여 응답 생성 (교직원식당 특수 노트 포함)
+        return ResponseBuilder.create_success_response(
+            parsed_menu,
             message=f"{RestaurantType.FACULTY.korean_name} 메뉴 처리 완료",
             special_note="교직원식당은 점심만 운영됩니다"
         )
@@ -59,7 +52,7 @@ def faculty_view(event, context):
         except Exception as error:
             logger.error(f"Slack 에러 알림 전송 실패: {error}")
 
-        return ParsedMenuData.error_response(
+        return ResponseBuilder.create_error_response(
             date=date or "unknown",
             restaurant=RestaurantType.FACULTY,
             error=e,
@@ -69,7 +62,7 @@ def faculty_view(event, context):
     except Exception as e:
         logger.error(f"교직원식당 시스템 오류: {e}", exc_info=True)
 
-        return ParsedMenuData.error_response(
+        return ResponseBuilder.create_error_response(
             date=date or "unknown",
             restaurant=RestaurantType.FACULTY,
             error=Exception("Internal server error"),

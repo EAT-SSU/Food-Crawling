@@ -6,7 +6,7 @@ from typing import Dict, List, Any
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_fixed
 
-from functions.shared.models.menu import RestaurantType
+from functions.shared.models.model import RestaurantType
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 
-from functions.shared.models.menu import RestaurantType
+from functions.shared.models.model import RestaurantType
 
 logger = logging.getLogger(__name__)
 

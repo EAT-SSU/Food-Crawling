@@ -2,7 +2,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, List
 
-from functions.shared.models.menu import TimeSlot, RestaurantType
+from functions.shared.models.model import TimeSlot, RestaurantType
 
 logger = logging.getLogger(__name__)
 
