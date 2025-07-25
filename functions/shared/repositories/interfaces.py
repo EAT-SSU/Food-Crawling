@@ -1,12 +1,12 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Union
 
-from functions.shared.models.menu import RawMenuData, ParsedMenuData, RestaurantType, TimeSlot
+from functions.shared.models.model import RawMenuData, ParsedMenuData, RestaurantType, TimeSlot
 
 
 class MenuScraperInterface(ABC):
     @abstractmethod
-    async def scrape_menu(self, date: str) -> RawMenuData:
+    async def scrape_menu(self, date: str) -> Union[RawMenuData, List[RawMenuData]]:
         pass
 
 

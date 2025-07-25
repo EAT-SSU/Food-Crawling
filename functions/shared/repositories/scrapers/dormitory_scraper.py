@@ -1,11 +1,15 @@
+# functions/shared/repositories/scrapers/dormitory_scraper.py
+import asyncio
 import logging
+from datetime import datetime
+from typing import List
 
 import aiohttp
 import pandas as pd
 from bs4 import BeautifulSoup
 
 from functions.shared.models.exceptions import MenuFetchException
-from functions.shared.models.menu import RawMenuData, RestaurantType
+from functions.shared.models.model import RawMenuData, RestaurantType
 from functions.shared.repositories.interfaces import MenuScraperInterface
 from functions.shared.utils.parsing_utils import make2d
 
@@ -13,29 +17,25 @@ logger = logging.getLogger(__name__)
 
 
 class DormitoryScraper(MenuScraperInterface):
-    """기숙사식당 웹 스크래퍼"""
+    """기숙사식당 웹 스크래퍼 - 간결한 버전"""
 
     def __init__(self, settings=None):
         if settings is None:
             from functions.config.settings import get_settings
             settings = get_settings()
-
         self.base_url = settings.DORMITORY_BASE_URL
 
-    async def scrape_menu(self, date: str) -> RawMenuData:
-        """기숙사식당 메뉴를 스크래핑합니다 (주간 데이터에서 특정 날짜 추출)."""
-        logger.info(f"기숙사식당 메뉴 스크래핑 시작: {date}")
+    async def scrape_menu(self, date: str) -> List[RawMenuData]:
+        """기숙사식당 주간 메뉴를 스크래핑합니다"""
+        logger.info(f"기숙사식당 주간 메뉴 스크래핑 시작: {date}")
 
-        # 날짜 파싱 (YYYYMMDD → year, month, day)
-        year = int(date[:4])
-        month = int(date[4:6])
-        day = int(date[6:8])
-
+        # API 호출
+        date_obj = datetime.strptime(date, '%Y%m%d')
         params = {
             'viewform': 'B0001_foodboard_list',
-            'gyear': year,
-            'gmonth': month,
-            'gday': day
+            'gyear': date_obj.year,
+            'gmonth': date_obj.month,
+            'gday': date_obj.day
         }
 
         async with aiohttp.ClientSession() as session:
@@ -43,74 +43,81 @@ class DormitoryScraper(MenuScraperInterface):
                 response.raise_for_status()
                 html_content = await response.text()
 
-        # 기숙사는 별도 파싱 로직 (주간 데이터에서 해당 날짜만 추출)
-        raw_menu_data = self._parse_dormitory_menu(html_content, date)
+        # HTML 파싱
+        raw_menu_list = self._parse_html_to_raw_menu_data(html_content)
 
-        logger.info(f"기숙사식당 메뉴 스크래핑 완료: {date}")
-        return raw_menu_data
+        logger.info(f"기숙사식당 주간 메뉴 스크래핑 완료: {len(raw_menu_list)}일치")
+        return raw_menu_list
 
-    def _parse_dormitory_menu(self, html_content: str, date: str) -> RawMenuData:
-        """기숙사 메뉴 파싱 (기존 Dormitory 클래스 로직 적용)"""
+    def _parse_html_to_raw_menu_data(self, html_content: str) -> List[RawMenuData]:
+        """HTML을 파싱하여 RawMenuData 리스트로 변환"""
         try:
             soup = BeautifulSoup(html_content, 'html.parser')
             table_tag = soup.find("table", "boxstyle02")
 
             if not table_tag:
-                raise MenuFetchException(target_date=date, raw_data="테이블을 찾을 수 없습니다")
+                raise MenuFetchException(target_date="weekly", raw_data="테이블을 찾을 수 없습니다")
 
-            # 2D 테이블로 변환
+            # 테이블을 DataFrame으로 변환
             table = make2d(table_tag)
             df = pd.DataFrame(table)
+            df.columns = df.iloc[0]  # 첫 행을 헤더로
+            df = df.drop(df.index[0]).set_index('날짜')
 
-            # 첫 번째 행을 헤더로 사용
-            dt2 = df.rename(columns=df.iloc[0])
-            dt3 = dt2.drop(dt2.index[0])
-
-            # 메뉴 텍스트 처리 (줄바꿈으로 분리된 메뉴들을 리스트로 변환)
-            if "조식" in dt3.columns:
-                dt3["조식"] = dt3["조식"].str.split("\r\n").apply(
-                    lambda x: [item.strip() for item in x if item.strip()] if isinstance(x, list) else []
-                )
-            if "중식" in dt3.columns:
-                dt3["중식"] = dt3["중식"].str.split("\r\n").apply(
-                    lambda x: [item.strip() for item in x if item.strip()] if isinstance(x, list) else []
-                )
-            if "석식" in dt3.columns:
-                dt3["석식"] = dt3["석식"].str.split("\r\n").apply(
-                    lambda x: [item.strip() for item in x if item.strip()] if isinstance(x, list) else []
-                )
+            # 메뉴 텍스트 분리
+            for col in ['조식', '중식', '석식']:
+                if col in df.columns:
+                    df[col] = df[col].str.split("\r\n")
 
             # 불필요한 컬럼 제거
-            if "중.석식" in dt3.columns:
-                del dt3["중.석식"]
+            if "중.석식" in df.columns:
+                del df["중.석식"]
 
-            dt3 = dt3.set_index('날짜')
+            # 각 날짜별로 RawMenuData 생성
+            raw_menu_list = []
+            for index, row in df.iterrows():
+                # 날짜 파싱
+                date_str = self._parse_date(str(index))
+                if not date_str:
+                    continue
 
-            # 해당 날짜의 메뉴만 추출
-            target_date_str = f"{date[:4]}-{date[4:6]}-{date[6:8]}"
-            menu_texts = {}
+                # 메뉴 텍스트 구성 (조식은 스크래핑하되 제외)
+                menu_texts = {}
+                for meal_time in ['중식', '석식']:  # 조식 제외
+                    if meal_time in df.columns:
+                        menu_list = row[meal_time]
+                        if isinstance(menu_list, list):
+                            # 빈 값 제거 및 운영 체크
+                            cleaned_items = [item.strip() for item in menu_list if item.strip()]
+                            if cleaned_items and not any("운영" in item for item in cleaned_items):
+                                menu_texts[meal_time] = " ".join(cleaned_items)
 
-            for index, row in dt3.iterrows():
-                # 날짜 매칭 (여러 형태의 날짜 형식 처리)
-                if target_date_str in str(index) or date[4:6] + "-" + date[6:8] in str(index):
-                    for meal_time in ['조식', '중식', '석식']:
-                        if meal_time in dt3.columns:
-                            menu_list = row[meal_time]
-                            if isinstance(menu_list, list) and menu_list:
-                                # 운영하지 않는 메뉴 체크
-                                if not any("운영" in menu for menu in menu_list):
-                                    menu_texts[meal_time] = " ".join(menu_list)
-                    break
+                # 메뉴가 있는 경우에만 RawMenuData 생성
+                if menu_texts:
+                    raw_menu_list.append(RawMenuData(
+                        date=date_str,
+                        restaurant=RestaurantType.DORMITORY,
+                        menu_texts=menu_texts
+                    ))
 
-            if not menu_texts:
-                raise MenuFetchException(target_date=date, raw_data="해당 날짜의 메뉴를 찾을 수 없습니다")
-
-            return RawMenuData(
-                date=date,
-                restaurant=RestaurantType.DORMITORY,
-                menu_texts=menu_texts
-            )
+            return raw_menu_list
 
         except Exception as e:
             logger.error(f"기숙사 메뉴 파싱 오류: {e}")
-            raise MenuFetchException(target_date=date, raw_data=str(e))
+            raise MenuFetchException(target_date="weekly", raw_data=str(e))
+
+    def _parse_date(self, date_str: str) -> str:
+        """날짜 문자열을 YYYYMMDD 형식으로 변환"""
+        try:
+            # "2024-03-25" 또는 "03-25" 형식 처리
+            clean_date = date_str.split()[0].replace("-", "")
+            if len(clean_date) == 4:  # MM-DD 형태
+                current_year = datetime.now().year
+                clean_date = f"{current_year}{clean_date}"
+            return clean_date if len(clean_date) == 8 else ""
+        except:
+            return ""
+
+if __name__ == '__main__':
+    d = DormitoryScraper()
+    menus = asyncio.run(d.scrape_menu('20250721'))

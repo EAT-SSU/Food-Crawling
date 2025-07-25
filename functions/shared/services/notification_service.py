@@ -31,10 +31,9 @@ class NotificationService:
         restaurant = parsed_menu.restaurant.korean_name
         date = parsed_menu.date
 
-        # MenuProcessor를 컨테이너에서 가져와서 사용
-        response_builder = self._container.get_response_builder()
-        success_slots = response_builder.get_successful_slots(parsed_menu)
-        total_slots = response_builder.get_all_slots(parsed_menu)
+        # 성공한 슬롯과 전체 슬롯 개수 계산
+        success_slots = parsed_menu.get_successful_slots()
+        total_slots = parsed_menu.get_all_slots()
 
         success_count = len(success_slots)
         total_count = len(total_slots)
