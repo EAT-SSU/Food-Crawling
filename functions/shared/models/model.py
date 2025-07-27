@@ -88,11 +88,11 @@ class ParsedMenuData:
     error_slots: Dict[str, str] = field(default_factory=dict)  # 키: 실패한 슬롯, 값: 오류 메시지
 
     def get_successful_slots(self) -> List[str]:
-        """성공적으로 파싱된 슬롯 목록 (GPT에서 오류도 안나고 value가 빈칸이 아닌 것들)"""
+        """성공적으로 파싱된 식당 key 목록 (GPT에서 오류도 안나고 value가 빈칸이 아닌 것들)"""
         return [slot for slot in self.menus.keys() if slot not in self.error_slots and self.menus[slot]]
 
     def get_all_slots(self) -> List[str]:
-        """모든 슬롯 목록"""
+        """모든 식당 key 목록"""
         return list(self.menus.keys())
 
     def is_complete_success(self) -> bool:

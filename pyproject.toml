@@ -34,8 +34,15 @@ markers = [
     "unit: mark a test as a unit test.",
     "integration: mark a test as an integration test.",
 ]
+asyncio_mode = "auto"
+
 
 [dependency-groups]
 dev = [
+    "psutil>=7.0.0",
     "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
+    "pytest-cov>=6.2.1",
+    "pytest-mock>=3.14.1",
+    "pytest-xdist>=3.8.0",
 ]
