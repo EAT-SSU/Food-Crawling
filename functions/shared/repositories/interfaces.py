@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Union
+from typing import List, Union, Optional, Dict, Any
 
 from functions.shared.models.model import RawMenuData, ParsedMenuData, RestaurantType, TimeSlot
 
@@ -22,8 +22,12 @@ class APIClientInterface(ABC):
                         menus: List[str], price: int) -> bool:
         pass
 
+    @abstractmethod
+    async def get_menu(self, date: str, restaurant: RestaurantType, time_slot: TimeSlot) -> Optional[Dict[str, Any]]:
+        pass
 
-class NotificationClientInterface(ABC):  # 이게 빠져있었네요!
+
+class NotificationClientInterface(ABC):
     @abstractmethod
     async def send_notification(self, message: str, channel: str = "#api-notification") -> bool:
         pass
