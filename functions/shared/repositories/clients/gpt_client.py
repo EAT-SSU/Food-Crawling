@@ -23,9 +23,9 @@ class GPTClient(MenuParserInterface):
             from functions.config.settings import get_settings
             settings:Settings = get_settings()
 
-        self.model = model or settings.GPT_MODEL
-        self.function_tools = function_tools or settings.GPT_FUNCTION_TOOLS
-        self.system_prompt = system_prompt or settings.GPT_SYSTEM_PROMPT
+        self.model = settings.GPT_MODEL
+        self.function_tools = settings.GPT_FUNCTION_TOOLS
+        self.system_prompt = settings.GPT_SYSTEM_PROMPT
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
     async def parse_menu(self, raw_menu: RawMenuData) -> ParsedMenuData:
@@ -43,7 +43,9 @@ class GPTClient(MenuParserInterface):
                     model=self.model,
                     messages=[
                         {"role": "system", "content": self.system_prompt},
-                        {"role": "user", "content": f"다음 식당 메뉴 텍스트에서 실제 음식 메뉴만 추출해주세요:\n\n{value}"}
+                        {"role": "user", "content": f"다음 식당 메뉴 텍스트에서 실제 음식 메뉴만 추출해주세요:\n\n{Settings.FACULTY_EXAMPLE_RAW_MENU}"},
+                        {"role": "assistant","content": f"{Settings.FACULTY_EXAMPLE_PARSED_MENU}"},
+                        {"role": "user","content": f"다음 식당 메뉴 텍스트에서 실제 음식 메뉴만 추출해주세요:\n\n{value}"},
                     ],
                     tools=self.function_tools,
                     tool_choice={"type": "function", "function": {"name": "extract_all_menus"}}

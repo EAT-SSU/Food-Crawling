@@ -3,7 +3,7 @@ import logging
 from typing import Optional, List
 
 from functions.config.dependencies import DependencyContainer
-from functions.shared.models.model import RestaurantType, TimeSlot, MenuPricing, ParsedMenuData
+from functions.shared.models.model import RestaurantType, TimeSlot, MenuPricing, ParsedMenuData, RawMenuData
 from functions.shared.repositories.clients.spring_api_client import SpringAPIClient
 from functions.shared.services.time_slot_strategy import TimeSlotStrategyFactory
 
@@ -11,69 +11,87 @@ logger = logging.getLogger(__name__)
 
 
 class ScrapingService:
-    """메뉴 스크래핑 서비스 - ResponseBuilder 적용"""
+    """메뉴 스크래핑 서비스 - 개선된 책임 분리 버전"""
 
     def __init__(self, container):
         self._container: DependencyContainer = container
 
     async def scrape_and_process(self, date: str, restaurant_type: RestaurantType,
                                  is_dev: bool = True) -> ParsedMenuData:
-        """메뉴 스크래핑부터 API 전송까지 전체 프로세스를 처리합니다."""
+        """메뉴 스크래핑부터 API 전송까지 전체 프로세스"""
         logger.info(f"메뉴 처리 시작: {restaurant_type.korean_name} {date}, 개발모드: {is_dev}")
 
-        # 1. 의존성 주입
-        scraper = self._container.get_scraper(restaurant_type)
-        parser = self._container.get_parser()
+        # 1. 스크래핑 단계 (HTML 추출 + GPT 파싱)
+        parsed_menu = await self.scrape_menu(date, restaurant_type)
 
-        # 2. 스크래핑
-        raw_menu = await scraper.scrape_menu(date)
-        logger.info(f"스크래핑 완료: {restaurant_type.korean_name} {date}")
-
-        # 3. GPT 파싱
-        parsed_menu = await parser.parse_menu(raw_menu)
-        logger.info(f"파싱 완료: {restaurant_type.korean_name} {date}")
-
-        # 4. API 전송 (성공한 것만)
-        await self._send_menus_to_api(parsed_menu, is_dev)
-
-        # 5. 부분 실패 로깅
-        self._log_processing_result(parsed_menu)
+        # 2. API 전송 단계
+        await self.send_to_api(parsed_menu, is_dev)
 
         return parsed_menu
 
     async def scrape_and_process_dormitory(self, date: str, is_dev: bool = True) -> List[ParsedMenuData]:
-        """기숙사식당 전용 메뉴 스크래핑 (주간 처리)"""
+        """기숙사식당 전용 메뉴 스크래핑부터 API 전송까지 전체 프로세스"""
         logger.info(f"기숙사식당 주간 메뉴 처리 시작: {date}, 개발모드: {is_dev}")
 
-        # 1. 의존성 주입
-        scraper = self._container.get_scraper(RestaurantType.DORMITORY)
-        parser = self._container.get_parser()
+        # 1. 스크래핑 단계 (주간)
+        parsed_menus = await self.scrape_dormitory_weekly(date)
 
-        # 2. 스크래핑 (List[RawMenuData] 반환)
-        raw_menus = await scraper.scrape_menu(date)
-        logger.info(f"기숙사 스크래핑 완료: {len(raw_menus)}일치 메뉴")
-
-        # 3. 각 RawMenuData를 GPT로 파싱
-        parsed_menus = []
-        for raw_menu in raw_menus:
-            logger.info(f"GPT 파싱 시작: {raw_menu.date}")
-
-            parsed_menu = await parser.parse_menu(raw_menu)
-            logger.info(f"GPT 파싱 완료: {raw_menu.date}")
-
-            # 4. API 전송
-            await self._send_menus_to_api(parsed_menu, is_dev)
-
-            # 5. 결과 로깅
-            self._log_processing_result(parsed_menu)
-
-            parsed_menus.append(parsed_menu)
+        # 2. API 전송 단계 (각 날짜별)
+        for parsed_menu in parsed_menus:
+            await self.send_to_api(parsed_menu, is_dev)
 
         logger.info(f"기숙사식당 주간 메뉴 처리 완료: {len(parsed_menus)}일치")
         return parsed_menus
 
-    async def _send_menus_to_api(self, parsed_menu: ParsedMenuData, is_dev: bool) -> None:
-        """파싱된 메뉴를 API에 전송합니다. (성공한 것만)"""
+    async def scrape_menu(self, date: str, restaurant_type: RestaurantType) -> ParsedMenuData:
+        """
+        메뉴 스크래핑: HTML 추출 + GPT 파싱까지 완료
+        (테스트하기 쉬운 완전한 단위)
+        """
+        logger.info(f"스크래핑 시작: {restaurant_type.korean_name} {date}")
+
+        # 1. HTML 추출
+        raw_menu = await self._extract_raw_menu(date, restaurant_type)
+        logger.info(f"HTML 추출 완료: {restaurant_type.korean_name} {date}")
+
+        # 2. GPT 파싱
+        parsed_menu = await self._parse_menu(raw_menu)
+        logger.info(f"GPT 파싱 완료: {restaurant_type.korean_name} {date}")
+
+        # 3. 결과 로깅
+        self._log_scraping_result(parsed_menu)
+
+        logger.info(f"스크래핑 완료: {restaurant_type.korean_name} {date}")
+        return parsed_menu
+
+    async def scrape_dormitory_weekly(self, date: str) -> List[ParsedMenuData]:
+        """
+        기숙사 주간 스크래핑: HTML 추출 + GPT 파싱까지 완료
+        (테스트하기 쉬운 완전한 단위)
+        """
+        logger.info(f"기숙사 주간 스크래핑 시작: {date}")
+
+        # 1. HTML 추출 (주간)
+        raw_menus = await self._extract_dormitory_weekly(date)
+        logger.info(f"기숙사 주간 HTML 추출 완료: {len(raw_menus)}일치")
+
+        # 2. GPT 파싱 (각 날짜별)
+        parsed_menus = []
+        for raw_menu in raw_menus:
+            parsed_menu = await self._parse_menu(raw_menu)
+            parsed_menus.append(parsed_menu)
+            self._log_scraping_result(parsed_menu)
+
+        logger.info(f"기숙사 주간 스크래핑 완료: {len(parsed_menus)}일치")
+        return parsed_menus
+
+    async def send_to_api(self, parsed_menu: ParsedMenuData, is_dev: bool = True) -> None:
+        """
+        파싱된 메뉴를 API에 전송 (순수 전송 책임)
+        (스크래핑과 완전히 분리된 단위)
+        """
+        logger.info(f"API 전송 시작: {parsed_menu.restaurant.korean_name} {parsed_menu.date}")
+
         clients: List[SpringAPIClient] = [self._container.get_dev_api_client()]
         if not is_dev:  # 운영 환경
             clients.append(self._container.get_prod_api_client())
@@ -114,8 +132,25 @@ class ScrapingService:
             f"{sent_count}개 슬롯 전송됨"
         )
 
-    def _log_processing_result(self, parsed_menu: ParsedMenuData) -> None:
-        """처리 결과 간단 로깅"""
+    # === 내부 구현 메서드들 ===
+
+    async def _extract_raw_menu(self, date: str, restaurant_type: RestaurantType) -> RawMenuData:
+        """HTML 추출만 담당 (순수 웹 스크래핑)"""
+        scraper = self._container.get_scraper(restaurant_type)
+        return await scraper.scrape_menu(date)
+
+    async def _extract_dormitory_weekly(self, date: str) -> List[RawMenuData]:
+        """기숙사 주간 HTML 추출만 담당"""
+        scraper = self._container.get_scraper(RestaurantType.DORMITORY)
+        return await scraper.scrape_menu(date)  # List[RawMenuData] 반환
+
+    async def _parse_menu(self, raw_menu: RawMenuData) -> ParsedMenuData:
+        """GPT 파싱만 담당 (순수 파싱)"""
+        parser = self._container.get_parser()
+        return await parser.parse_menu(raw_menu)
+
+    def _log_scraping_result(self, parsed_menu: ParsedMenuData) -> None:
+        """스크래핑 결과 로깅"""
         total_slots = len(parsed_menu.get_all_slots())
         success_slots = len(parsed_menu.get_successful_slots())
 
@@ -124,9 +159,9 @@ class ScrapingService:
 
         if parsed_menu.error_slots:
             failed_slots = list(parsed_menu.error_slots.keys())
-            logger.warning(f"부분 처리 완료: {restaurant} {date} - 성공: {success_slots}/{total_slots}, 실패: {failed_slots}")
+            logger.warning(f"부분 스크래핑 완료: {restaurant} {date} - 성공: {success_slots}/{total_slots}, 실패: {failed_slots}")
         else:
-            logger.info(f"전체 처리 완료: {restaurant} {date} - {success_slots}/{total_slots} 슬롯 성공")
+            logger.info(f"전체 스크래핑 완료: {restaurant} {date} - {success_slots}/{total_slots} 슬롯 성공")
 
     def _extract_time_slot(self, menu_slot: str, restaurant: RestaurantType) -> Optional[TimeSlot]:
         """메뉴 슬롯에서 시간대를 추출합니다. (Strategy Pattern 사용)"""
