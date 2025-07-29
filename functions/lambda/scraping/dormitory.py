@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from functions.shared.models.exceptions import (
-    HolidayException, MenuFetchException, MenuParseException, WeirdRestaurantName
+    HolidayException, MenuFetchException, MenuParseException, WeirdRestaurantNameException
 )
 from functions.shared.models.model import RestaurantType, ResponseBuilder, ParsedMenuData
 
@@ -65,7 +65,7 @@ def dormitory_view(event, context):
             special_note="기숙사식당은 조식을 운영하지 않습니다"
         )
 
-    except (HolidayException, MenuFetchException, MenuParseException, WeirdRestaurantName) as e:
+    except (HolidayException, MenuFetchException, MenuParseException, WeirdRestaurantNameException) as e:
         logger.error(f"기숙사식당 도메인 오류: {e}")
 
         # Slack 에러 알림

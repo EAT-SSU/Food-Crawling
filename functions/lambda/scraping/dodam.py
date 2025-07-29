@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from functions.shared.models.exceptions import (
-    HolidayException, MenuFetchException, MenuParseException, WeirdRestaurantName
+    HolidayException, MenuFetchException, MenuParseException
 )
 from functions.shared.models.model import RestaurantType, ParsedMenuData, ResponseBuilder
 

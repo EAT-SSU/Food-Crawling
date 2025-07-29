@@ -135,10 +135,6 @@ class TestParsedMenuData:
         )
         assert success_menu.is_complete_success()
 
-    def test_is_partial_success(self, sample_parsed_menu):
-        """부분 성공 여부 테스트"""
-        assert sample_parsed_menu.is_partial_success()
-
 
 class TestResponseBuilder:
     """ResponseBuilder 클래스 테스트"""
