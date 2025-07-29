@@ -87,8 +87,7 @@ class Settings:
             DODAM_LAMBDA_BASE_URL=cls._get_required_env("DODAM_LAMBDA_BASE_URL"),
             HAKSIK_LAMBDA_BASE_URL=cls._get_required_env("HAKSIK_LAMBDA_BASE_URL"),
             DORMITORY_LAMBDA_BASE_URL=cls._get_required_env("DORMITORY_LAMBDA_BASE_URL"),
-            # FACULTY_LAMBDA_BASE_URL=cls._get_required_env("FACULTY_LAMBDA_BASE_URL"), # TODO
-            FACULTY_LAMBDA_BASE_URL="",
+            FACULTY_LAMBDA_BASE_URL=cls._get_required_env("FACULTY_LAMBDA_BASE_URL"),
         )
 
     @staticmethod
