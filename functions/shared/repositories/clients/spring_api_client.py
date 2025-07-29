@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_fixed
 
+from functions.shared.models.exceptions import MenuPostException
 from functions.shared.models.model import RequestBody, RestaurantType, TimeSlot
 from functions.shared.repositories.interfaces import APIClientInterface
 
@@ -45,7 +46,11 @@ class SpringAPIClient(APIClientInterface):
 
         except Exception as e:
             logger.error(f"Spring API 메뉴 전송 실패: {e}")
-            raise
+            raise MenuPostException(
+                target_date=date,
+                restaurant_type=restaurant,
+                details=f"Spring API 메뉴 전송 실패:{e}"
+            )
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     async def get_menu(self, date: str, restaurant: RestaurantType, time_slot: TimeSlot) -> Optional[Dict[str, Any]]:

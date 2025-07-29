@@ -28,12 +28,19 @@ class DormitoryScraper(MenuScraperInterface):
         logger.info(f"기숙사식당 주간 메뉴 스크래핑 시작: {date}")
 
         # HTML 콘텐츠 가져오기
-        html_content = await self._fetch_menu_html(date)
+        try:
+            html_content = await self._fetch_menu_html(date)
 
-        # HTML 파싱하여 메뉴 데이터 추출
-        raw_menu_list = self._parse_html_to_raw_menu_data(html_content)
-
-        logger.info(f"기숙사식당 주간 메뉴 스크래핑 완료: {len(raw_menu_list)}일치")
+            # HTML 파싱하여 메뉴 데이터 추출
+            raw_menu_list = self._parse_html_to_raw_menu_data(html_content)
+            logger.info(f"기숙사식당 주간 메뉴 스크래핑 완료: {len(raw_menu_list)}일치")
+        except Exception as e:
+            menu_fetch_exception = MenuFetchException(
+                target_date=date,
+                restaurant_type=RestaurantType.DORMITORY,
+            )
+            menu_fetch_exception.add_note(str(e))
+            raise menu_fetch_exception
         return raw_menu_list
 
     async def _fetch_menu_html(self, date: str) -> str:
@@ -53,32 +60,20 @@ class DormitoryScraper(MenuScraperInterface):
 
     def _parse_html_to_raw_menu_data(self, html_content: str) -> List[RawMenuData]:
         """HTML을 파싱하여 RawMenuData 리스트로 변환"""
-        try:
-            # HTML에서 테이블 추출
-            table_data = self._extract_table_from_html(html_content)
+        # HTML에서 테이블 추출
+        table_data = self._extract_table_from_html(html_content)
 
-            # 테이블 데이터를 구조화된 형태로 변환
-            structured_data = self._structure_table_data(table_data)
+        # 테이블 데이터를 구조화된 형태로 변환
+        structured_data = self._structure_table_data(table_data)
 
-            # 구조화된 데이터를 RawMenuData로 변환
-            return self._convert_to_raw_menu_data(structured_data)
-
-        except Exception as e:
-            logger.error(f"기숙사 메뉴 파싱 오류: {e}")
-            raise MenuFetchException(target_date="weekly", raw_data=str(e))
+        # 구조화된 데이터를 RawMenuData로 변환
+        return self._convert_to_raw_menu_data(structured_data)
 
     def _extract_table_from_html(self, html_content: str) -> List[List[str]]:
         """HTML에서 테이블을 추출하여 2D 리스트로 반환"""
         soup = BeautifulSoup(html_content, 'html.parser')
         table_tag = soup.find("table", "boxstyle02")
-
-        if not table_tag:
-            raise MenuFetchException(target_date="weekly", raw_data="테이블을 찾을 수 없습니다")
-
         table_data = make2d(table_tag)
-
-        if not table_data:
-            raise MenuFetchException(target_date="weekly", raw_data="테이블 데이터가 없습니다")
 
         return table_data
 
@@ -90,9 +85,6 @@ class DormitoryScraper(MenuScraperInterface):
         # 헤더와 컬럼 인덱스 매핑
         headers = table_data[0]
         date_col_idx, meal_col_indices = self._get_column_indices(headers)
-
-        if date_col_idx is None:
-            raise MenuFetchException(target_date="weekly", raw_data="날짜 컬럼을 찾을 수 없습니다")
 
         # 각 행을 딕셔너리로 변환
         structured_data = []
