@@ -1,3 +1,5 @@
+import logging
+
 from functions.config.settings import Settings
 from functions.shared.models.model import RestaurantType
 
@@ -45,17 +47,25 @@ class DependencyContainer:
     def get_scraping_service(self):
         """스크래핑 서비스 생성"""
         from functions.shared.services.scraping_service import ScrapingService
-        return ScrapingService(self)
+        return ScrapingService(
+            parser=self.get_parser(),
+            prod_api_client=self.get_prod_api_client(),
+            dev_api_client=self.get_dev_api_client(),
+            scraper_factory=self.get_scraper
+        )
 
     def get_notification_service(self):
         """알림 서비스 생성"""
         from functions.shared.services.notification_service import NotificationService
-        return NotificationService(self)
+        return NotificationService(slack_client=self.get_slack_client())
 
     def get_scheduling_service(self):
         """스케줄링 서비스 생성"""
         from functions.shared.services.scheduling_service import SchedulingService
-        return SchedulingService(self)
+        return SchedulingService(
+            notification_service=self.get_notification_service(),
+            scraping_service=self.get_scraping_service()
+        )
 
     # Private factory methods
     def _create_haksik_scraper(self):
@@ -83,6 +93,7 @@ def get_container() -> DependencyContainer:
     """전역 DI 컨테이너 반환"""
     global _container
     if _container is None:
+        logging.basicConfig(level=logging.INFO)
         from functions.config.settings import Settings
         settings = Settings.from_env()
         _container = DependencyContainer(settings)
