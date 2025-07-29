@@ -6,6 +6,7 @@ from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 from functions.config.settings import Settings
+from functions.shared.models.exceptions import MenuParseException
 from functions.shared.models.model import RawMenuData, ParsedMenuData
 from functions.shared.repositories.interfaces import MenuParserInterface
 
@@ -59,15 +60,23 @@ class GPTClient(MenuParserInterface):
                 # 빈 결과 확인
                 if not menus:
                     logger.warning(f"메뉴 슬롯 '{key}'에서 메뉴를 찾지 못했습니다.")
-                    errors[key] = "메뉴를 찾지 못했습니다."
+                    errors[key] = MenuParseException(
+                        target_date=raw_menu.date,
+                        restaurant_type=raw_menu.restaurant,
+                        error_details=f"메뉴 슬롯 '{key}'에서 메뉴를 찾지 못했습니다."
+                    )
 
                 # 특수문자 제거
-                refined_menus = [re.sub(r'[\*]+(?=[\uAC00-\uD7A3])', '', menu) for menu in menus]
+                refined_menus = [re.sub(r'[\*]+(?=[가-힣])', '', menu) for menu in menus]
                 result_dict[key] = refined_menus
 
             except Exception as e:
                 logger.error(f"메뉴 슬롯 '{key}' 처리 중 오류 발생: {str(e)}")
-                errors[key] = str(e)
+                errors[key] = MenuParseException(
+                    target_date=raw_menu.date,
+                    restaurant_type=raw_menu.restaurant,
+                    error_details=str(e)
+                )
 
         # 성공 여부 확인
         is_successful = len(errors) == 0

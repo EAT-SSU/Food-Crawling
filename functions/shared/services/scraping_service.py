@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import Optional, List
 
-from functions.config.dependencies import DependencyContainer
+from functions.shared.models.exceptions import MenuPostException
 from functions.shared.models.model import RestaurantType, TimeSlot, MenuPricing, ParsedMenuData, RawMenuData
 from functions.shared.repositories.clients.spring_api_client import SpringAPIClient
 from functions.shared.services.time_slot_strategy import TimeSlotStrategyFactory
@@ -13,8 +13,11 @@ logger = logging.getLogger(__name__)
 class ScrapingService:
     """메뉴 스크래핑 서비스 - 개선된 책임 분리 버전"""
 
-    def __init__(self, container):
-        self._container: DependencyContainer = container
+    def __init__(self, parser, prod_api_client, dev_api_client, scraper_factory):
+        self._parser = parser
+        self._prod_api_client = prod_api_client
+        self._dev_api_client = dev_api_client
+        self._scraper_factory = scraper_factory
 
     async def scrape_and_process(self, date: str, restaurant_type: RestaurantType,
                                  is_dev: bool = True) -> ParsedMenuData:
@@ -51,7 +54,7 @@ class ScrapingService:
         logger.info(f"스크래핑 시작: {restaurant_type.korean_name} {date}")
 
         # 1. HTML 추출
-        raw_menu = await self._extract_raw_menu(date, restaurant_type)
+        raw_menu = await self._extract_raw_menu(date, restaurant_type)  # HolidayException or Sraping 실패
         logger.info(f"HTML 추출 완료: {restaurant_type.korean_name} {date}")
 
         # 2. GPT 파싱
@@ -87,31 +90,31 @@ class ScrapingService:
 
     async def send_to_api(self, parsed_menu: ParsedMenuData, is_dev: bool = True) -> None:
         """
-        파싱된 메뉴를 API에 전송 (순수 전송 책임)
-        (스크래핑과 완전히 분리된 단위)
+        파싱된 메뉴를 API에 전송하고 결과를 ParsedMenuData에 반영
         """
         logger.info(f"API 전송 시작: {parsed_menu.restaurant.korean_name} {parsed_menu.date}")
 
-        clients: List[SpringAPIClient] = [self._container.get_dev_api_client()]
+        clients: List[SpringAPIClient] = [self._dev_api_client]
         if not is_dev:  # 운영 환경
-            clients.append(self._container.get_prod_api_client())
+            clients.append(self._prod_api_client)
 
         restaurant, date = parsed_menu.restaurant, parsed_menu.date
         sent_count = 0
+        failed_slots = []
 
-        for slot in parsed_menu.get_successful_slots():
-            # 시간대와 가격 확인
-            time_slot = self._extract_time_slot(slot, restaurant)
-            if not time_slot:
-                continue
-
-            price = MenuPricing.get_price(restaurant, time_slot)
-            if not price:
-                continue
-
-            menu_items = parsed_menu.menus[slot]
-
+        for slot, menu in parsed_menu.get_successful_slots():
             try:
+                # 시간대와 가격 확인
+                time_slot = self._extract_time_slot(slot, restaurant)
+                if not time_slot:
+                    continue
+
+                price = MenuPricing.get_price(restaurant, time_slot)
+                if not price:
+                    continue
+
+                menu_items = parsed_menu.menus[slot]
+
                 await asyncio.gather(*[
                     client.post_menu(date, restaurant, time_slot, menu_items, price)
                     for client in clients
@@ -121,33 +124,48 @@ class ScrapingService:
                     f"API 전송 성공: {restaurant.english_name} "
                     f"{time_slot.english_name} ({len(menu_items)}개 메뉴)"
                 )
-            except Exception as e:
-                logger.error(
-                    f"API 전송 실패: {restaurant.english_name} "
-                    f"{time_slot.english_name} - {e}"
-                )
+            except MenuPostException as e:
+                error_msg = f"API 전송 부분 실패: {restaurant.korean_name} {slot.english_name} - {e}"
+                logger.error(error_msg)
+
+                # API 전송 실패를 ParsedMenuData에 기록
+                parsed_menu.error_slots[slot] = e
+                failed_slots.append(slot)
+                continue
+
+        # 전체 성공 여부 업데이트
+        if failed_slots:
+            parsed_menu.success = False
+            logger.warning(f"API 전송 부분 실패: {failed_slots}")
+
+        # API 전송이 모두 실패했다면 예외 발생
+        if sent_count == 0 and len(parsed_menu.get_successful_slots()) > 0:
+            raise MenuPostException(
+                target_date=parsed_menu.date,
+                restaurant_type=restaurant,
+                details=f"모든 API 전송 실패: {len(failed_slots)}개 슬롯 {parsed_menu.error_slots}"
+            )
 
         logger.info(
             f"API 전송 완료: {restaurant.korean_name} {date} - "
-            f"{sent_count}개 슬롯 전송됨"
+            f"{sent_count}개 슬롯 전송 성공, {len(failed_slots)}개 슬롯 실패"
         )
 
     # === 내부 구현 메서드들 ===
 
     async def _extract_raw_menu(self, date: str, restaurant_type: RestaurantType) -> RawMenuData:
         """HTML 추출만 담당 (순수 웹 스크래핑)"""
-        scraper = self._container.get_scraper(restaurant_type)
+        scraper = self._scraper_factory(restaurant_type)
         return await scraper.scrape_menu(date)
 
     async def _extract_dormitory_weekly(self, date: str) -> List[RawMenuData]:
         """기숙사 주간 HTML 추출만 담당"""
-        scraper = self._container.get_scraper(RestaurantType.DORMITORY)
+        scraper = self._scraper_factory(RestaurantType.DORMITORY)
         return await scraper.scrape_menu(date)  # List[RawMenuData] 반환
 
     async def _parse_menu(self, raw_menu: RawMenuData) -> ParsedMenuData:
         """GPT 파싱만 담당 (순수 파싱)"""
-        parser = self._container.get_parser()
-        return await parser.parse_menu(raw_menu)
+        return await self._parser.parse_menu(raw_menu)
 
     def _log_scraping_result(self, parsed_menu: ParsedMenuData) -> None:
         """스크래핑 결과 로깅"""

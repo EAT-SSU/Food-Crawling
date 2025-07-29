@@ -46,7 +46,7 @@ class HaksikScraper(MenuScraperInterface):
         """휴무일 체크"""
         soup = BeautifulSoup(html_content, "html.parser")
         if soup.find(text="오늘은 쉽니다.") or "휴무" in soup.text:
-            raise HolidayException(target_date=date, raw_data=html_content)
+            raise HolidayException(target_date=date, restaurant_type=RestaurantType.HAKSIK,raw_data=html_content)
 
     def _parse_menu_from_html(self, html_content: str, date: str) -> RawMenuData:
         """HTML에서 메뉴 데이터를 파싱합니다."""
@@ -60,6 +60,6 @@ class HaksikScraper(MenuScraperInterface):
         )
 
         if not raw_menu_data.menu_texts:
-            raise MenuFetchException(target_date=date, raw_data=raw_menu_data)
+            raise MenuFetchException(target_date=date, restaurant_type=RestaurantType.HAKSIK,raw_menu_data=raw_menu_data)
 
         return raw_menu_data
