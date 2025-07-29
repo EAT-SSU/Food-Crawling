@@ -1,0 +1,165 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Food Scrapper Serverless Application
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Architectures: [arm64]
+    Timeout: 300
+    MemorySize: 512
+    Environment:
+      Variables:
+        GPT_API_KEY: !Ref GPTApiKey
+        SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
+        API_BASE_URL: !Ref ApiBaseUrl
+        DEV_API_BASE_URL: !Ref DevApiBaseUrl
+        # 순환 의존성 제거를 위해 하드코딩된 URL 사용 (배포 후 업데이트 필요)
+        DODAM_LAMBDA_BASE_URL: "https://your-api-id.execute-api.your-region.amazonaws.com/Prod/dodam"
+        HAKSIK_LAMBDA_BASE_URL: "https://your-api-id.execute-api.your-region.amazonaws.com/Prod/haksik"
+        FACULTY_LAMBDA_BASE_URL: "https://your-api-id.execute-api.your-region.amazonaws.com/Prod/faculty"
+        DORMITORY_LAMBDA_BASE_URL: "https://your-api-id.execute-api.your-region.amazonaws.com/Prod/dormitory"
+
+Parameters:
+  GPTApiKey:
+    Type: String
+    NoEcho: true
+  SlackWebhookUrl:
+    Type: String
+    NoEcho: true
+  ApiBaseUrl:
+    Type: String
+  DevApiBaseUrl:
+    Type: String
+
+Resources:
+  # Python 의존성 레이어
+  PythonRequirementsLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "${AWS::StackName}-python-requirements"
+      Description: Python requirements layer
+      ContentUri: python-requirements-layer/
+      CompatibleRuntimes:
+        - python3.11
+      CompatibleArchitectures:
+        - x86_64
+
+  # Scraping Functions
+  DodamScrapingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: functions.scraping.views.dodam.lambda_handler
+      Layers:
+        - !Ref PythonRequirementsLayer
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /dodam
+            Method: get
+
+  HaksikScrapingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: functions.scraping.views.haksik.lambda_handler
+      Layers:
+        - !Ref PythonRequirementsLayer
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /haksik
+            Method: get
+
+  FacultyScrapingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: functions.scraping.views.faculty.lambda_handler
+      Layers:
+        - !Ref PythonRequirementsLayer
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /faculty
+            Method: get
+
+  DormitoryScrapingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: functions.scraping.views.dormitory.lambda_handler
+      Layers:
+        - !Ref PythonRequirementsLayer
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /dormitory
+            Method: get
+
+  # Scheduling Functions
+  DodamSchedulingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: functions.scheduling.views.dodam.lambda_handler
+      Layers:
+        - !Ref PythonRequirementsLayer
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /schedule/dodam
+            Method: get
+
+  HaksikSchedulingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: functions.scheduling.views.haksik.lambda_handler
+      Layers:
+        - !Ref PythonRequirementsLayer
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /schedule/haksik
+            Method: get
+
+  FacultySchedulingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: functions.scheduling.views.faculty.lambda_handler
+      Layers:
+        - !Ref PythonRequirementsLayer
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /schedule/faculty
+            Method: get
+
+  DormitorySchedulingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: functions.scheduling.views.dormitory.lambda_handler
+      Layers:
+        - !Ref PythonRequirementsLayer
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /schedule/dormitory
+            Method: get
+
+Outputs:
+  FoodScrapperApi:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"

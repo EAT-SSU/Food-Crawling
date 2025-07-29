@@ -21,12 +21,12 @@ def dodam_schedule_view(event, context):
         from functions.shared.utils.date_utils import get_next_weekdays, get_current_weekdays
         weekdays = get_current_weekdays() if delayed_schedule else get_next_weekdays()
 
-        # 3. 공통 스케줄링 서비스 사용
+        # 3. 일반 식당용 스케줄링 서비스 사용
         from functions.config.dependencies import get_container
         container = get_container()
         scheduling_service = container.get_scheduling_service()
 
-        results = asyncio.run(scheduling_service.process_weekly_schedule(
+        results = asyncio.run(scheduling_service.process_weekly_schedule_general(
             RestaurantType.DODAM, weekdays
         ))
 
