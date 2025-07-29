@@ -27,6 +27,10 @@ class RestaurantType(Enum):
         }
         return url_map[self]
 
+    def __str__(self) -> str:
+        """객체를 문자열로 변환할 때 한글 이름이 반환되도록 설정합니다."""
+        return self.korean_name
+
 
 class TimeSlot(Enum):
     ONE_DOLLAR_MORNING = "MORNING"  # 학생식당 전용
@@ -85,11 +89,15 @@ class ParsedMenuData:
     restaurant: RestaurantType
     menus: Dict[str, List[str]]  # 키: 메뉴 슬롯, 값: 메뉴 항목 리스트
     success: bool = True
-    error_slots: Dict[str, str] = field(default_factory=dict)  # 키: 실패한 슬롯, 값: 오류 메시지
+    error_slots: Dict[str, Exception] = field(default_factory=dict)  # 키: 실패한 슬롯, 값: 오류 메시지
 
-    def get_successful_slots(self) -> List[str]:
-        """성공적으로 파싱된 식당 key 목록 (GPT에서 오류도 안나고 value가 빈칸이 아닌 것들)"""
-        return [slot for slot in self.menus.keys() if slot not in self.error_slots and self.menus[slot]]
+    def get_successful_slots(self) -> Dict[str, List[str]]:
+        """성공적으로 파싱된 식당 key 목록 (GPT에서 오류도 안나고 menu가 빈칸이 아닌 것들)"""
+        return {
+            restaurant_key: menu
+            for restaurant_key, menu in self.menus.items()
+            if menu and restaurant_key not in self.error_slots
+        }
 
     def get_all_slots(self) -> List[str]:
         """모든 식당 key 목록"""
