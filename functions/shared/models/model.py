@@ -113,6 +113,17 @@ class ParsedMenuData:
         total = len(self.menus)
         return 0 < len(successful) < total
 
+    def to_dict(self) -> dict:
+        """딕셔너리로 변환 (JSON 직렬화용)"""
+        return {
+            'date': self.date,
+            'restaurant': str(self.restaurant),
+            'menus': self.menus,
+            'success': self.success,
+            'error_slots': {k: str(v) for k, v in self.error_slots.items()}  # Exception을 문자열로 변환
+        }
+
+
 
 @dataclass
 class RequestBody:
