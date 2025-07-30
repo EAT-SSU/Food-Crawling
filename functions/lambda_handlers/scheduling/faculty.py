@@ -2,20 +2,20 @@ import asyncio
 import json
 import logging
 
-from functions.shared.models.model import RestaurantType
+from functions.shared.models.model import RestaurantType, ParsedMenuData
 
 logger = logging.getLogger(__name__)
 
 
-def dodam_schedule_view(event, context):
-    """도담식당 주간 스케줄 뷰"""
+def faculty_schedule_view(event, context):
+    """교직원식당 주간 스케줄 뷰"""
     try:
         # 1. 파라미터 추출
         delayed_schedule = False
         if event.get("queryStringParameters"):
             delayed_schedule = bool(event["queryStringParameters"].get("delayed_schedule"))
 
-        logger.info(f"도담식당 주간 스케줄 시작 (delayed: {delayed_schedule})")
+        logger.info(f"교직원식당 주간 스케줄 시작 (delayed: {delayed_schedule})")
 
         # 2. 날짜 목록 결정
         from functions.shared.utils.date_utils import get_next_weekdays, get_current_weekdays
@@ -26,30 +26,30 @@ def dodam_schedule_view(event, context):
         container = get_container()
         scheduling_service = container.get_scheduling_service()
 
-        results = asyncio.run(scheduling_service.process_weekly_schedule_general(
-            RestaurantType.DODAM, weekdays
+        results:ParsedMenuData = asyncio.run(scheduling_service.process_weekly_schedule_general(
+            RestaurantType.FACULTY, weekdays
         ))
 
-        logger.info("도담식당 주간 스케줄 완료")
+        logger.info("교직원식당 주간 스케줄 완료")
 
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json; charset=utf-8'},
-            'body': json.dumps(results, ensure_ascii=False)
+            'body': json.dumps(results.to_dict(), ensure_ascii=False)
         }
 
     except Exception as e:
-        logger.error(f"도담식당 스케줄링 오류: {e}", exc_info=True)
+        logger.error(f"교직원식당 스케줄링 오류: {e}", exc_info=True)
 
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json; charset=utf-8'},
             'body': json.dumps({
                 'error': 'Internal server error',
-                'restaurant': 'DODAM'
+                'restaurant': 'FACULTY'
             }, ensure_ascii=False)
         }
 
 
 # AWS Lambda 핸들러
-lambda_handler = dodam_schedule_view
+lambda_handler = faculty_schedule_view
