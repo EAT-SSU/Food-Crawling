@@ -14,11 +14,6 @@ Globals:
         SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
         API_BASE_URL: !Ref ApiBaseUrl
         DEV_API_BASE_URL: !Ref DevApiBaseUrl
-        # 순환 의존성 제거를 위해 하드코딩된 URL 사용 (배포 후 업데이트 필요)
-        DODAM_LAMBDA_BASE_URL: "https://your-api-id.execute-api.your-region.amazonaws.com/Prod/dodam"
-        HAKSIK_LAMBDA_BASE_URL: "https://your-api-id.execute-api.your-region.amazonaws.com/Prod/haksik"
-        FACULTY_LAMBDA_BASE_URL: "https://your-api-id.execute-api.your-region.amazonaws.com/Prod/faculty"
-        DORMITORY_LAMBDA_BASE_URL: "https://your-api-id.execute-api.your-region.amazonaws.com/Prod/dormitory"
 
 Parameters:
   GPTApiKey:
@@ -43,123 +38,193 @@ Resources:
       CompatibleRuntimes:
         - python3.11
       CompatibleArchitectures:
-        - x86_64
+        - arm64
 
-  # Scraping Functions
+  # === Scraping Functions ===
+  # 하루짜리 스크래핑 함수들 (백업용)
   DodamScrapingFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
-      Handler: functions.scraping.views.dodam.lambda_handler
+      CodeUri: ./
+      Handler: functions.lambda_handlers.scraping.dodam.lambda_handler
       Layers:
         - !Ref PythonRequirementsLayer
       Events:
-        Api:
+        ScrapingApi:
           Type: Api
           Properties:
-            Path: /dodam
+            Path: /scraping/dodam
             Method: get
 
   HaksikScrapingFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
-      Handler: functions.scraping.views.haksik.lambda_handler
+      CodeUri: ./
+      Handler: functions.lambda_handlers.scraping.haksik.lambda_handler
       Layers:
         - !Ref PythonRequirementsLayer
       Events:
-        Api:
+        ScrapingApi:
           Type: Api
           Properties:
-            Path: /haksik
+            Path: /scraping/haksik
             Method: get
 
   FacultyScrapingFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: .
-      Handler: functions.scraping.views.faculty.lambda_handler
+      Handler: lambda_handlers.scraping.faculty.lambda_handler
       Layers:
         - !Ref PythonRequirementsLayer
       Events:
-        Api:
+        ScrapingApi:
           Type: Api
           Properties:
-            Path: /faculty
+            Path: /scraping/faculty
             Method: get
 
   DormitoryScrapingFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: .
-      Handler: functions.scraping.views.dormitory.lambda_handler
+      Handler: lambda_handlers.scraping.dormitory.lambda_handler
       Layers:
         - !Ref PythonRequirementsLayer
       Events:
-        Api:
+        ScrapingApi:
           Type: Api
           Properties:
-            Path: /dormitory
+            Path: /scraping/dormitory
             Method: get
 
-  # Scheduling Functions
+  # === Scheduling Functions ===
+  # 주간 스케줄링 함수들 (메인)
   DodamSchedulingFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
-      Handler: functions.scheduling.views.dodam.lambda_handler
+      CodeUri: ./
+      Handler: functions.lambda_handlers.scheduling.dodam.lambda_handler
       Layers:
         - !Ref PythonRequirementsLayer
       Events:
-        Api:
+        SchedulingApi:
           Type: Api
           Properties:
             Path: /schedule/dodam
             Method: get
+        # 매주 일요일 오후 4시에 자동 실행 (KST 기준으로는 일요일 07시 UTC)
+        WeeklySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 7 ? * SUN *)
+            Input: |
+              {
+                "httpMethod": "GET",
+                "path": "/schedule/dodam",
+                "queryStringParameters": {
+                  "delayed_schedule": "false"
+                }
+              }
 
   HaksikSchedulingFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
-      Handler: functions.scheduling.views.haksik.lambda_handler
+      CodeUri: ./
+      Handler: functions.lambda_handlers.scheduling.haksik.lambda_handler
       Layers:
         - !Ref PythonRequirementsLayer
       Events:
-        Api:
+        SchedulingApi:
           Type: Api
           Properties:
             Path: /schedule/haksik
             Method: get
+        # 매주 일요일 오후 4시에 자동 실행
+        WeeklySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 7 ? * SUN *)
+            Input: |
+              {
+                "httpMethod": "GET",
+                "path": "/schedule/haksik",
+                "queryStringParameters": {
+                  "delayed_schedule": "false"
+                }
+              }
 
   FacultySchedulingFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
-      Handler: functions.scheduling.views.faculty.lambda_handler
+      CodeUri: ./
+      Handler: functions.lambda_handlers.scheduling.faculty.lambda_handler
       Layers:
         - !Ref PythonRequirementsLayer
       Events:
-        Api:
+        SchedulingApi:
           Type: Api
           Properties:
             Path: /schedule/faculty
             Method: get
+        # 매주 월요일 오전 6시에 자동 실행
+        WeeklySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 21 ? * SUN *)
+            Input: |
+              {
+                "httpMethod": "GET",
+                "path": "/schedule/faculty",
+                "queryStringParameters": {
+                  "delayed_schedule": "false"
+                }
+              }
 
   DormitorySchedulingFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
-      Handler: functions.scheduling.views.dormitory.lambda_handler
+      CodeUri: ./
+      Handler: functions.lambda_handlers.scheduling.dormitory.lambda_handler
       Layers:
         - !Ref PythonRequirementsLayer
       Events:
-        Api:
+        SchedulingApi:
           Type: Api
           Properties:
             Path: /schedule/dormitory
             Method: get
+        # 매주 월요일 오전 6시에 자동 실행
+        WeeklySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 21 ? * SUN *)
+            Input: |
+              {
+                "httpMethod": "GET",
+                "path": "/schedule/dormitory",
+                "queryStringParameters": {
+                  "delayed_schedule": "false"
+                }
+              }
 
 Outputs:
   FoodScrapperApi:
     Description: "API Gateway endpoint URL"
     Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+
+  ScrapingEndpoints:
+    Description: "Scraping API endpoints (백업용)"
+    Value: !Sub |
+      도담식당: https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/scraping/dodam
+      학생식당: https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/scraping/haksik
+      교직원식당: https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/scraping/faculty
+      기숙사식당: https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/scraping/dormitory
+
+  SchedulingEndpoints:
+    Description: "Scheduling API endpoints (메인)"
+    Value: !Sub |
+      도담식당: https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/schedule/dodam
+      학생식당: https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/schedule/haksik
+      교직원식당: https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/schedule/faculty
+      기숙사식당: https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/schedule/dormitory
