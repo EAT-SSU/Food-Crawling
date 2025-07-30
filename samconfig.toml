@@ -1,0 +1,45 @@
+version = 0.1
+
+[default]
+[default.global.parameters]
+stack_name = "food-scrapper-serverless"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.validate.parameters]
+lint = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+s3_prefix = "food-scrapper-serverless"
+region = "ap-northeast-2"  # 서울 리전, 필요에 따라 변경
+image_repositories = []
+parameter_overrides = "file://secrets.yml"
+
+[default.package.parameters]
+resolve_s3 = true
+
+[default.sync.parameters]
+watch = true
+
+[default.local_start_api.parameters]
+warm_containers = "EAGER"
+
+[default.local_start_lambda.parameters]
+warm_containers = "EAGER"
+
+# Development environment
+[dev]
+[dev.deploy.parameters]
+stack_name = "food-scrapper-dev"
+parameter_overrides = "Environment=dev file://secrets.yml"
+
+# Production environment
+[prod]
+[prod.deploy.parameters]
+stack_name = "food-scrapper-prod"
+parameter_overrides = "Environment=prod file://secrets.yml"

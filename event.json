@@ -1,0 +1,9 @@
+{
+  "httpMethod": "GET",
+  "path": "/schedule/haksik",
+  "queryStringParameters": {
+    "delayed_schedule": "false"
+  },
+  "headers": {},
+  "body": null
+}

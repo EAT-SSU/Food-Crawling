@@ -1,0 +1,29 @@
+# Exclude source code tests
+tests/
+
+# Exclude project documentation and configuration
+README.md
+serverless.yml
+poetry.lock
+PULL_REQUEST_TEMPLATE.md
+pyproject.toml
+requirements.txt
+uv.lock
+
+
+# Exclude git and CI/CD files
+.git/
+.github/
+
+# Exclude IDE and editor files
+.idea/
+.vscode/
+
+# Exclude virtual environment and cache files
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Exclude SAM build artifacts
+.aws-sam/
