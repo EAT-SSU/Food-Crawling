@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_fixed
@@ -19,9 +20,12 @@ class SlackClient:
         message = self._build_menu_message(parsed_menu)
         return await self._send_message(message)
 
-    async def send_error_notification(self, date:str,restaurant_type:RestaurantType,exception: Exception) -> bool:
+    async def send_error_notification(self,exception: Exception,date:Optional[str]=None,restaurant_type:Optional[RestaurantType]=None) -> bool:
         """에러 알림 전송"""
-        message = f"⚠️ {restaurant_type.korean_name}({date}) 메뉴 에러{str(exception)}\n"
+        if date and restaurant_type:
+            message = f"⚠️ {restaurant_type.korean_name}({date}) Critical 에러 {str(exception)}\n"
+        else:
+            message = f"⚠️ 에러 {str(exception)}\n"
 
         return await self._send_message(message)
 
