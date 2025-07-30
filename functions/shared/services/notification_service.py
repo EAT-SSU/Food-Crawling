@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 from functions.shared.models.model import ParsedMenuData, RestaurantType
 
@@ -15,6 +16,6 @@ class NotificationService:
         """메뉴 처리 완료 알림"""
         return await self._slack_client.send_menu_notification(parsed_menu)
 
-    async def send_error_notification(self, date:str,restaurant_type:RestaurantType,exception: Exception) -> bool:
+    async def send_error_notification(self, exception: Exception,date:Optional[str]=None,restaurant_type:Optional[RestaurantType]=None) -> bool:
         """에러 알림"""
-        return await self._slack_client.send_error_notification(date,restaurant_type,exception)
+        return await self._slack_client.send_error_notification(exception,date=date,restaurant_type=restaurant_type)

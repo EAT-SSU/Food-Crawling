@@ -37,5 +37,5 @@ class NotificationClientInterface(ABC):
         pass
 
     @abstractmethod
-    async def send_error_notification(self, error: Exception) -> bool:
+    async def send_error_notification(self,exception: Exception,date:Optional[str]=None,restaurant_type:Optional[RestaurantType]=None) -> bool:
         pass

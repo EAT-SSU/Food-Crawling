@@ -47,7 +47,7 @@ def dodam_view(event, context):
             from functions.config.dependencies import get_container
             container = get_container()
             notification_service = container.get_notification_service()
-            asyncio.run(notification_service.send_error_notification(e))
+            asyncio.run(notification_service.send_error_notification(e, date=date, restaurant_type=RestaurantType.DODAM))
         except Exception as slack_error:
             logger.error(f"Slack 에러 알림 전송 실패: {slack_error}")
 
@@ -67,7 +67,7 @@ def dodam_view(event, context):
             from functions.config.dependencies import get_container
             container = get_container()
             notification_service = container.get_notification_service()
-            asyncio.run(notification_service.send_error_notification(e))
+            asyncio.run(notification_service.send_error_notification(e, date=date, restaurant_type=RestaurantType.DODAM))
         except Exception as error:
             logger.error(f"Slack 에러 알림 전송 실패: {error}")
 
