@@ -13,12 +13,6 @@ class Settings:
     API_BASE_URL: str
     DEV_API_BASE_URL: str
 
-    # AWS lambda base url
-    DODAM_LAMBDA_BASE_URL: str
-    HAKSIK_LAMBDA_BASE_URL: str
-    DORMITORY_LAMBDA_BASE_URL: str
-    FACULTY_LAMBDA_BASE_URL: str
-
     # Scraping data source url
     SOONGGURI_BASE_URL: str = "http://m.soongguri.com/m_req/m_menu.php"
     DORMITORY_BASE_URL: str = "https://ssudorm.ssu.ac.kr:444/SShostel/mall_main.php"
@@ -70,6 +64,7 @@ class Settings:
         - 영어 번역, 가격, 알러지 정보, 원산지 정보는 제외
         - &로 연결된 메뉴는 절대 분리하지 마세요
         - 부가적인 메뉴 설명은 반드시 제외할 것
+        - 만약 메뉴가 없다고 판단되면 빈 리스트를 반환할 것
     """
     GPT_MODEL: str = "gpt-4o-mini"
 
@@ -84,10 +79,6 @@ class Settings:
             SLACK_WEBHOOK_URL=cls._get_required_env("SLACK_WEBHOOK_URL"),
             API_BASE_URL=cls._get_required_env("API_BASE_URL"),
             DEV_API_BASE_URL=cls._get_required_env("DEV_API_BASE_URL"),
-            DODAM_LAMBDA_BASE_URL=cls._get_required_env("DODAM_LAMBDA_BASE_URL"),
-            HAKSIK_LAMBDA_BASE_URL=cls._get_required_env("HAKSIK_LAMBDA_BASE_URL"),
-            DORMITORY_LAMBDA_BASE_URL=cls._get_required_env("DORMITORY_LAMBDA_BASE_URL"),
-            FACULTY_LAMBDA_BASE_URL=cls._get_required_env("FACULTY_LAMBDA_BASE_URL"),
         )
 
     @staticmethod
