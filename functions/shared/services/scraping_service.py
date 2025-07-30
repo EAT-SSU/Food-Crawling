@@ -102,7 +102,7 @@ class ScrapingService:
         sent_count = 0
         failed_slots = []
 
-        for slot, menu in parsed_menu.get_successful_slots():
+        for slot, menu in parsed_menu.get_successful_slots().items():
             try:
                 # 시간대와 가격 확인
                 time_slot = self._extract_time_slot(slot, restaurant)

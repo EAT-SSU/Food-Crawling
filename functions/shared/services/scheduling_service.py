@@ -34,19 +34,24 @@ class SchedulingService:
             except (HolidayException, MenuFetchException, MenuParseException,
                 WeirdRestaurantNameException, MenuPostException) as e:
                 logger.warning(f"{restaurant_type.korean_name}({date}) 처리 실패: {type(e).__name__} - {e}")
-                await self.notification_service.send_error_notification(date, restaurant_type, e)
+                await self.notification_service.send_error_notification(e, date, restaurant_type)
                 continue
             except Exception as e:
                 # 예상치 못한 예외 - 더 자세한 로깅
                 logger.error(f"{restaurant_type.korean_name}({date}) 예상치 못한 오류: {type(e).__name__} - {e}", exc_info=True)
-                await self.notification_service.send_error_notification(date, restaurant_type, e)
+                await self.notification_service.send_error_notification(e, date, restaurant_type)
                 continue
         # Slack 알림 전송
 
         for parsed_menu in parsed_menus:
             if parsed_menu.error_slots:
-                logger.info(f"{restaurant_type.korean_name}({parsed_menu.target_date}) 부분 실패: {parsed_menu.error_slots}")
-                await self.notification_service.send_error_notification(parsed_menu)
+                logger.info(f"{restaurant_type.korean_name}({parsed_menu.date}) 부분 실패: {parsed_menu.error_slots}")
+                for slot, error in parsed_menu.error_slots.items():
+                    await self.notification_service.send_error_notification(
+                        exception=Exception(f"[{slot}] {error}"),
+                        date=parsed_menu.date,
+                        restaurant_type=restaurant_type
+                    )
 
         logger.info(f"{restaurant_type.korean_name} 주간 스케줄 처리 완료")
         return parsed_menus
@@ -62,6 +67,20 @@ class SchedulingService:
 
         try:
             parsed_menus: List[ParsedMenuData] = await scraping_service.scrape_and_process_dormitory(date)
+
+            for parsed_menu in parsed_menus:
+                if parsed_menu.error_slots:
+                    logger.info(
+                        f"{restaurant_type.korean_name}({parsed_menu.date}) 부분 실패: {parsed_menu.error_slots}")
+                    for slot, error in parsed_menu.error_slots.items():
+                        await self.notification_service.send_error_notification(
+                            exception=Exception(f"[{slot}] {error}"),
+                            date=parsed_menu.date,
+                            restaurant_type=restaurant_type
+                        )
+                else:
+                    await self.notification_service.send_menu_notification(parsed_menu)
+
             return parsed_menus
         except Exception as e:
             results[date] = {
