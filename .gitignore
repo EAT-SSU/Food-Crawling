@@ -165,3 +165,5 @@ secrets.yml
 env.json
 python-requirements-layer/*
 .aws-sam/
+env-prod.json
+env-dev.json
