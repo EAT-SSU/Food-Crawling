@@ -27,7 +27,7 @@ def haksik_schedule_view(event, context):
         scheduling_service = container.get_scheduling_service()
 
         results:ParsedMenuData = asyncio.run(scheduling_service.process_weekly_schedule_general(
-            RestaurantType.HAKSIK, weekdays
+            RestaurantType.HAKSIK, weekdays, is_dev=False
         ))
 
         logger.info("학생식당 주간 스케줄 완료")
