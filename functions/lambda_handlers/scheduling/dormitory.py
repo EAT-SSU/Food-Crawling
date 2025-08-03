@@ -27,7 +27,8 @@ def dormitory_schedule_view(event, context):
         container = get_container()
         scheduling_service = container.get_scheduling_service()
 
-        results:List[ParsedMenuData] = asyncio.run(scheduling_service.process_weekly_schedule_dormitory(weekdays))
+        results: List[ParsedMenuData] = asyncio.run(
+            scheduling_service.process_weekly_schedule_dormitory(weekdays, is_dev=False))
         return_results = [result.to_dict() for result in results]
 
         logger.info("기숙사식당 주간 스케줄 완료")
