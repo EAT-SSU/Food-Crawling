@@ -26,8 +26,8 @@ def dodam_schedule_view(event, context):
         container = get_container()
         scheduling_service = container.get_scheduling_service()
 
-        results:ParsedMenuData = asyncio.run(scheduling_service.process_weekly_schedule_general(
-            RestaurantType.DODAM, weekdays,is_dev=False
+        results: ParsedMenuData = asyncio.run(scheduling_service.process_weekly_schedule_general(
+            RestaurantType.DODAM, weekdays, is_dev=False
         ))
 
         logger.info("도담식당 주간 스케줄 완료")
