@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from functions.shared.models.exceptions import (
-    HolidayException, MenuFetchException, MenuParseException
+    HolidayException, MenuFetchException, MenuParseException, WeirdRestaurantNameException
 )
 from functions.shared.models.model import RestaurantType, ParsedMenuData, ResponseBuilder
 
@@ -39,7 +39,7 @@ def dodam_view(event, context):
             message=f"{RestaurantType.DODAM.korean_name} 메뉴 처리 완료"
         )
 
-    except (HolidayException, MenuFetchException, MenuParseException, WeirdRestaurantName) as e:
+    except (HolidayException, MenuFetchException, MenuParseException,WeirdRestaurantNameException) as e:
         logger.error(f"도담식당 도메인 오류: {e}")
 
         # Slack 에러 알림
