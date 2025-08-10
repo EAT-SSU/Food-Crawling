@@ -11,9 +11,8 @@ def dodam_schedule_view(event, context):
     """도담식당 주간 스케줄 뷰"""
     try:
         # 1. 파라미터 추출
-        delayed_schedule = False
-        if event.get("queryStringParameters"):
-            delayed_schedule = bool(event["queryStringParameters"].get("delayed_schedule"))
+        query_params = event.get("queryStringParameters") or {}
+        delayed_schedule = query_params.get("delayed_schedule", "").lower() == 'true'
 
         logger.info(f"도담식당 주간 스케줄 시작 (delayed: {delayed_schedule})")
 
