@@ -73,7 +73,7 @@ Resources:
   FacultyScrapingFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
+      CodeUri: ./
       Handler: functions.lambda_handlers.scraping.faculty.lambda_handler
       Layers:
         - !Ref PythonRequirementsLayer
@@ -87,7 +87,7 @@ Resources:
   DormitoryScrapingFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: .
+      CodeUri: ./
       Handler: functions.lambda_handlers.scraping.dormitory.lambda_handler
       Layers:
         - !Ref PythonRequirementsLayer
@@ -167,7 +167,7 @@ Resources:
           Properties:
             Path: /schedule/faculty
             Method: get
-        # 매주 월요일 오전 6시에 자동 실행
+        # 매주 일요일 오후 4시에 자동 실행
         WeeklySchedule:
           Type: Schedule
           Properties:
@@ -194,11 +194,11 @@ Resources:
           Properties:
             Path: /schedule/dormitory
             Method: get
-        # 매주 월요일 오전 6시에 자동 실행
+        # 매주 월요일 오전 8시에 자동 실행
         WeeklySchedule:
           Type: Schedule
           Properties:
-            Schedule: cron(0 21 ? * SUN *)
+            Schedule: cron(0 23 ? * SUN *)
             Input: |
               {
                 "httpMethod": "GET",
