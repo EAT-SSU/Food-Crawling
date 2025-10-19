@@ -32,6 +32,9 @@ print(json.dumps({"Parameters": params}, indent=2))' > env.json
 	@printf "\033[0;32m✓ env.json 생성 완료\033[0m\n"
 
 build: ## SAM 애플리케이션 빌드
+	@printf "\033[0;34m=== uv로부터 requirements.txt 생성 중 ===\033[0m\n"
+	uv export --no-dev --no-hashes --no-editable -o requirements.txt
+	@printf "\033[0;32m✓ requirements.txt 생성 완료\033[0m\n"
 	@printf "\033[0;34m=== 빌드 중 ===\033[0m\n"
 	sam build --parallel --cached
 	@printf "\033[0;32m✓ 빌드 완료\033[0m\n"
