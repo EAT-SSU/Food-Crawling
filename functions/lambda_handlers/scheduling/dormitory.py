@@ -19,7 +19,8 @@ def dormitory_schedule_view(event, context):
 
         # 2. 날짜 목록 결정
         from functions.shared.utils.date_utils import get_next_weekdays, get_current_weekdays
-        weekdays = get_current_weekdays() if delayed_schedule else get_next_weekdays()
+        # 250921 이후, 기숙사는 주말도 추가되었음
+        weekdays = get_current_weekdays(include_weekend=True) if delayed_schedule else get_next_weekdays(include_weekend=True)
 
         # 3. 기숙사 전용 스케줄링 서비스 사용
         from functions.config.dependencies import get_container
