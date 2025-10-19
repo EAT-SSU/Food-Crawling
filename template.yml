@@ -34,11 +34,13 @@ Resources:
     Properties:
       LayerName: !Sub "${AWS::StackName}-python-requirements"
       Description: Python requirements layer
-      ContentUri: python-requirements-layer/
+      ContentUri: ./
       CompatibleRuntimes:
         - python3.11
       CompatibleArchitectures:
         - arm64
+    Metadata:
+      BuildMethod: python3.11
 
   # === Scraping Functions ===
   # 하루짜리 스크래핑 함수들 (백업용)
