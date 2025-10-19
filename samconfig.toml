@@ -2,7 +2,7 @@ version = 0.1
 
 [default]
 [default.global.parameters]
-stack_name = "food-scrapper-default"
+stack_name = "food-scrapper"
 
 [default.build.parameters]
 cached = true
@@ -10,30 +10,7 @@ parallel = true
 
 [default.deploy.parameters]
 capabilities = "CAPABILITY_IAM"
-confirm_changeset = true
-resolve_s3 = true
-region = "ap-northeast-2"
-
-# Development environment
-s3_prefix = "food-scrapper-default"
-image_repositories = []
-[dev]
-[dev.global.parameters]
-stack_name = "food-scrapper-dev"
-
-[dev.deploy.parameters]
-capabilities = "CAPABILITY_IAM"
-confirm_changeset = true
-resolve_s3 = true
-region = "ap-northeast-2"
-
-# Production environment
-[prod]
-[prod.global.parameters]
-stack_name = "food-scrapper-prod"
-
-[prod.deploy.parameters]
-capabilities = "CAPABILITY_IAM"
 confirm_changeset = false
 resolve_s3 = true
 region = "ap-northeast-2"
+s3_prefix = "food-scrapper"
