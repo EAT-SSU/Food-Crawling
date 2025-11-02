@@ -93,7 +93,7 @@ def get_container() -> DependencyContainer:
     """전역 DI 컨테이너 반환"""
     global _container
     if _container is None:
-        logging.basicConfig(level=logging.INFO)
+        logging.getLogger().setLevel(logging.INFO)
         from functions.config.settings import Settings
         settings = Settings.from_env()
         _container = DependencyContainer(settings)
