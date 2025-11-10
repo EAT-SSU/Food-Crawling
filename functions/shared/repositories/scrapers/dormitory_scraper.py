@@ -32,7 +32,7 @@ class DormitoryScraper(MenuScraperInterface):
             html_content = await self._fetch_menu_html(date)
 
             # HTML 파싱하여 메뉴 데이터 추출
-            raw_menu_list = self._parse_html_to_raw_menu_data(html_content)[:5] # TODO: 추후 주말 기숙사 식당 추가 시 슬라이싱 제거
+            raw_menu_list = self._parse_html_to_raw_menu_data(html_content)[:7] # TODO: 추후 주말 기숙사 식당 추가 시 슬라이싱 제거 제거하는 거랑 관계 없이 여기서 이렇게 하면 안되는데...
             logger.info(f"기숙사식당 주간 메뉴 스크래핑 완료: {len(raw_menu_list)}일치")
         except Exception as e:
             menu_fetch_exception = MenuFetchException(
