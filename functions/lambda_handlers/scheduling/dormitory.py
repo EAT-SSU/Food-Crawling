@@ -4,6 +4,7 @@ import logging
 from typing import List
 
 from functions.shared.models.model import ParsedMenuData
+from functions.shared.utils.date_utils import WeekType
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +20,8 @@ def dormitory_schedule_view(event, context):
 
         # 2. 날짜 목록 결정
         from functions.shared.utils.date_utils import get_current_weekdays
-        # 250921 이후, 기숙사는 주말도 추가되었음
-        weekdays = get_current_weekdays(include_weekend=True)
+        # 250921 이후, 기숙사는 주말도 추가되었음, 다만 로직 문제로 날짜 변경됬을 시  functions/shared/scrapers/dormitory_scraper.py scrape_menu()를 확인해서 함께 변경해야함... :(
+        weekdays = get_current_weekdays(week_type=WeekType.FULL_WEEK)
 
         # 3. 기숙사 전용 스케줄링 서비스 사용
         from functions.config.dependencies import get_container
