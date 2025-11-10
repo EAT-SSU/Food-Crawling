@@ -3,6 +3,7 @@ import json
 import logging
 
 from functions.shared.models.model import RestaurantType, ParsedMenuData
+from functions.shared.utils.date_utils import WeekType
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ def dodam_schedule_view(event, context):
 
         # 2. 날짜 목록 결정
         from functions.shared.utils.date_utils import get_next_weekdays, get_current_weekdays
-        weekdays = get_current_weekdays() if delayed_schedule else get_next_weekdays()
+        weekdays = get_current_weekdays(week_type=WeekType.INCLUDE_SATURDAY) if delayed_schedule else get_next_weekdays(week_type=WeekType.INCLUDE_SATURDAY)
 
         # 3. 일반 식당용 스케줄링 서비스 사용
         from functions.config.dependencies import get_container
