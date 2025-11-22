@@ -268,26 +268,28 @@ uv run pytest tests/test_scrapers_real.py::TestAllScrapersComparison::test_all_s
 """
 
 if __name__ == '__main__':
-    date = "20251016"
+    date = "20251119"
     container = get_container()
     scraping_service = container.get_scraping_service()
     logging.basicConfig(level=logging.INFO)
 
     # dodam_parsed_menu: ParsedMenuData = asyncio.run(scraping_service.scrape_and_process(date, RestaurantType.DODAM))
-    from functions.shared.repositories.scrapers.faculty_scraper import FacultyScraper
-    haksik_parsed_menu: RawMenuData = asyncio.run(HaksikScraper().scrape_menu(date=date))
+    # from functions.shared.repositories.scrapers.faculty_scraper import FacultyScraper
+    # haksik_parsed_menu: RawMenuData = asyncio.run(HaksikScraper().scrape_menu(date=date))
+    dodam_parsed_menu: RawMenuData = asyncio.run(DodamScraper().scrape_menu(date=date))
+    dodam_refined_menu:ParsedMenuData = asyncio.run(scraping_service.scrape_menu(date=date,restaurant_type=RestaurantType.DODAM))
     # TODO: 여기서 scrapping + LLM 테스트하면 됨
     # faculty_parsed_menu: RawMenuData = asyncio.run(FacultyScraper().scrape_menu(date=date))
     # faculty_refined_menu:ParsedMenuData = asyncio.run(scraping_service.scrape_menu(date=date,restaurant_type=RestaurantType.FACULTY))
 
-    from functions.shared.utils.date_utils import get_current_weekdays
-
-    dates = get_current_weekdays()
-    result = []
-    for date in dates:
-        faculty_parsed_menu: RawMenuData = asyncio.run(FacultyScraper().scrape_menu(date=date))
-        faculty_refined_menu:ParsedMenuData = asyncio.run(scraping_service.scrape_menu(date=date,restaurant_type=RestaurantType.FACULTY))
-        result.append(faculty_refined_menu)
+    # from functions.shared.utils.date_utils import get_current_weekdays
+    #
+    # dates = get_current_weekdays()
+    # result = []
+    # for date in dates:
+    #     faculty_parsed_menu: RawMenuData = asyncio.run(FacultyScraper().scrape_menu(date=date))
+    #     faculty_refined_menu:ParsedMenuData = asyncio.run(scraping_service.scrape_menu(date=date,restaurant_type=RestaurantType.FACULTY))
+    #     result.append(faculty_refined_menu)
 
 
     # haksik_parsed_menu = asyncio.run(scraping_service.scrape_and_process(date, RestaurantType.HAKSIK))
