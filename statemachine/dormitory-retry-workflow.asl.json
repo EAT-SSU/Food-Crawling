@@ -1,0 +1,56 @@
+{
+  "Comment": "기숙사 메뉴 스케줄 재시도 워크플로우 - 빈 결과(미게시) 시 2시간 간격 최대 6회 시도",
+  "StartAt": "InvokeDormitory",
+  "States": {
+    "InvokeDormitory": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${DormitorySchedulingFunctionArn}",
+        "Payload": {
+          "httpMethod": "GET",
+          "path": "/schedule/dormitory",
+          "queryStringParameters": {
+            "delayed_schedule": "false"
+          }
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        },
+        {
+          "ErrorEquals": ["RetryableEmptyMenuError"],
+          "IntervalSeconds": 7200,
+          "MaxAttempts": 5,
+          "BackoffRate": 1.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "NotifyFinalFailure"
+        }
+      ],
+      "End": true
+    },
+    "NotifyFinalFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${NotifyFailureFunctionArn}",
+        "Payload.$": "$"
+      },
+      "End": true
+    }
+  }
+}

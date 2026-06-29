@@ -196,19 +196,32 @@ Resources:
           Properties:
             Path: /schedule/dormitory
             Method: get
-        # 매주 월요일 오전 8시에 자동 실행
+
+  NotifyFailureFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: functions.lambda_handlers.notify_failure.lambda_handler
+      Layers:
+        - !Ref PythonRequirementsLayer
+
+  DormitoryRetryStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/dormitory-retry-workflow.asl.json
+      DefinitionSubstitutions:
+        DormitorySchedulingFunctionArn: !GetAtt DormitorySchedulingFunction.Arn
+        NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref DormitorySchedulingFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref NotifyFailureFunction
+      Events:
         WeeklySchedule:
           Type: Schedule
           Properties:
             Schedule: cron(0 23 ? * SUN *)
-            Input: |
-              {
-                "httpMethod": "GET",
-                "path": "/schedule/dormitory",
-                "queryStringParameters": {
-                  "delayed_schedule": "false"
-                }
-              }
 
 Outputs:
   FoodScrapperApi:
