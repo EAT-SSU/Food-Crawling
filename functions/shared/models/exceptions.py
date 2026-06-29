@@ -63,3 +63,12 @@ class MenuPostException(BaseRestaurantException):
         note = details
         super().__init__(target_date, restaurant_type, note)
         self.details = details
+
+
+class RetryableEmptyMenuError(BaseRestaurantException):
+    """스크래핑 결과가 비어 있어(사이트 미게시) Step Functions 재시도가 필요한 예외"""
+
+    def __init__(self, target_date: str, restaurant_type: RestaurantType, scraped_days: int = 0):
+        note = f"스크래핑 결과가 비어 있습니다. (수집 일수: {scraped_days}) 사이트 메뉴 미게시로 추정되어 재시도가 필요합니다."
+        super().__init__(target_date, restaurant_type, note)
+        self.scraped_days = scraped_days

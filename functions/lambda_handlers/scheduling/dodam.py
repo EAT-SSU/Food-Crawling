@@ -26,7 +26,7 @@ def dodam_schedule_view(event, context):
         container = get_container()
         scheduling_service = container.get_scheduling_service()
 
-        results: ParsedMenuData = asyncio.run(scheduling_service.process_weekly_schedule_general(
+        results: list[ParsedMenuData] = asyncio.run(scheduling_service.process_weekly_schedule_general(
             RestaurantType.DODAM, weekdays, is_dev=False
         ))
 
@@ -35,7 +35,7 @@ def dodam_schedule_view(event, context):
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json; charset=utf-8'},
-            'body': json.dumps(results.to_dict(), ensure_ascii=False)
+            'body': json.dumps([r.to_dict() for r in results], ensure_ascii=False)
         }
 
     except Exception as e:

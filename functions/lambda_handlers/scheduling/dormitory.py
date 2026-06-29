@@ -3,7 +3,8 @@ import json
 import logging
 from typing import List
 
-from functions.shared.models.model import ParsedMenuData
+from functions.shared.models.exceptions import RetryableEmptyMenuError
+from functions.shared.models.model import ParsedMenuData, RestaurantType
 from functions.shared.utils.date_utils import WeekType
 
 logger = logging.getLogger(__name__)
@@ -11,46 +12,33 @@ logger = logging.getLogger(__name__)
 
 def dormitory_schedule_view(event, context):
     """기숙사식당 주간 스케줄 뷰"""
-    try:
-        # 1. 파라미터 추출
-        query_params = event.get("queryStringParameters") or {}
-        delayed_schedule = query_params.get("delayed_schedule", "").lower() == 'true'
+    query_params = event.get("queryStringParameters") or {}
+    delayed_schedule = query_params.get("delayed_schedule", "").lower() == 'true'
 
-        logger.info(f"기숙사식당 주간 스케줄 시작 (delayed: {delayed_schedule})")
+    logger.info(f"기숙사식당 주간 스케줄 시작 (delayed: {delayed_schedule})")
 
-        # 2. 날짜 목록 결정
-        from functions.shared.utils.date_utils import get_current_weekdays
-        # 250921 이후, 기숙사는 주말도 추가되었음, 다만 로직 문제로 날짜 변경됬을 시  functions/shared/scrapers/dormitory_scraper.py scrape_menu()를 확인해서 함께 변경해야함... :(
-        weekdays = get_current_weekdays(week_type=WeekType.FULL_WEEK)
+    from functions.shared.utils.date_utils import get_current_weekdays
+    # 250921 이후, 기숙사는 주말도 추가되었음, 다만 로직 문제로 날짜 변경됬을 시  functions/shared/scrapers/dormitory_scraper.py scrape_menu()를 확인해서 함께 변경해야함... :(
+    weekdays = get_current_weekdays(week_type=WeekType.FULL_WEEK)
 
-        # 3. 기숙사 전용 스케줄링 서비스 사용
-        from functions.config.dependencies import get_container
-        container = get_container()
-        scheduling_service = container.get_scheduling_service()
+    from functions.config.dependencies import get_container
+    container = get_container()
+    scheduling_service = container.get_scheduling_service()
 
-        results: List[ParsedMenuData] = asyncio.run(
-            scheduling_service.process_weekly_schedule_dormitory(weekdays, is_dev=False))
-        return_results = [result.to_dict() for result in results]
+    results: List[ParsedMenuData] = asyncio.run(
+        scheduling_service.process_weekly_schedule_dormitory(weekdays, is_dev=False))
 
-        logger.info("기숙사식당 주간 스케줄 완료")
+    # 결과가 비면(사이트 미게시) 예외를 던져 Step Functions가 몇 시간 뒤 재시도하도록 한다
+    if not results:
+        raise RetryableEmptyMenuError(target_date=weekdays[0], restaurant_type=RestaurantType.DORMITORY)
 
-        return {
-            'statusCode': 200,
-            'headers': {'Content-Type': 'application/json; charset=utf-8'},
-            'body': json.dumps(return_results, ensure_ascii=False)
-        }
+    logger.info("기숙사식당 주간 스케줄 완료")
 
-    except Exception as e:
-        logger.error(f"기숙사식당 스케줄링 오류: {e}", exc_info=True)
-
-        return {
-            'statusCode': 500,
-            'headers': {'Content-Type': 'application/json; charset=utf-8'},
-            'body': json.dumps({
-                'error': 'Internal server error',
-                'restaurant': 'DORMITORY'
-            }, ensure_ascii=False)
-        }
+    return {
+        'statusCode': 200,
+        'headers': {'Content-Type': 'application/json; charset=utf-8'},
+        'body': json.dumps([r.to_dict() for r in results], ensure_ascii=False)
+    }
 
 
 # AWS Lambda 핸들러
