@@ -32,7 +32,8 @@ class DormitoryScraper(MenuScraperInterface):
             html_content = await self._fetch_menu_html(date)
 
             # HTML 파싱하여 메뉴 데이터 추출
-            raw_menu_list = self._parse_html_to_raw_menu_data(html_content)[:7] # TODO: 추후 주말 기숙사 식당 추가 시 슬라이싱 제거 제거하는 거랑 관계 없이 여기서 이렇게 하면 안되는데...
+            base_year = datetime.strptime(date, '%Y%m%d').year
+            raw_menu_list = self._parse_html_to_raw_menu_data(html_content, base_year)[:7] # TODO: 추후 주말 기숙사 식당 추가 시 슬라이싱 제거 제거하는 거랑 관계 없이 여기서 이렇게 하면 안되는데...
             logger.info(f"기숙사식당 주간 메뉴 스크래핑 완료: {len(raw_menu_list)}일치")
         except Exception as e:
             menu_fetch_exception = MenuFetchException(
@@ -58,7 +59,7 @@ class DormitoryScraper(MenuScraperInterface):
                 response.raise_for_status()
                 return await response.text()
 
-    def _parse_html_to_raw_menu_data(self, html_content: str) -> List[RawMenuData]:
+    def _parse_html_to_raw_menu_data(self, html_content: str, base_year: int) -> List[RawMenuData]:
         """HTML을 파싱하여 RawMenuData 리스트로 변환"""
         # HTML에서 테이블 추출
         table_data = self._extract_table_from_html(html_content)
@@ -67,7 +68,7 @@ class DormitoryScraper(MenuScraperInterface):
         structured_data = self._structure_table_data(table_data)
 
         # 구조화된 데이터를 RawMenuData로 변환
-        return self._convert_to_raw_menu_data(structured_data)
+        return self._convert_to_raw_menu_data(structured_data, base_year)
 
     def _extract_table_from_html(self, html_content: str) -> List[List[str]]:
         """HTML에서 테이블을 추출하여 2D 리스트로 반환"""
@@ -106,6 +107,9 @@ class DormitoryScraper(MenuScraperInterface):
             elif header in ['조식', '중식', '석식']:
                 meal_col_indices[header] = i
 
+        if date_col_idx is None:
+            raise ValueError(f"'날짜' 컬럼을 찾을 수 없습니다. 테이블 구조 변경 의심: headers={headers}")
+
         return date_col_idx, meal_col_indices
 
     def _process_table_row(self, row: List[str], date_col_idx: int, meal_col_indices: Dict[str, int]) -> Dict[str, any]:
@@ -120,13 +124,13 @@ class DormitoryScraper(MenuScraperInterface):
 
         return row_data
 
-    def _convert_to_raw_menu_data(self, structured_data: List[Dict[str, any]]) -> List[RawMenuData]:
+    def _convert_to_raw_menu_data(self, structured_data: List[Dict[str, any]], base_year: int) -> List[RawMenuData]:
         """구조화된 데이터를 RawMenuData 리스트로 변환"""
         raw_menu_list = []
 
         for row_data in structured_data:
             # 날짜 파싱
-            date_str = self._parse_date(str(row_data['날짜']))
+            date_str = self._parse_date(str(row_data['날짜']), base_year)
             if not date_str:
                 continue
 
@@ -158,14 +162,13 @@ class DormitoryScraper(MenuScraperInterface):
 
         return menu_texts
 
-    def _parse_date(self, date_str: str) -> str:
+    def _parse_date(self, date_str: str, base_year: int) -> str:
         """날짜 문자열을 YYYYMMDD 형식으로 변환"""
         try:
             # "2024-03-25" 또는 "03-25" 형식 처리
             clean_date = date_str.split()[0].replace("-", "")
-            if len(clean_date) == 4:  # MM-DD 형태
-                current_year = datetime.now().year
-                clean_date = f"{current_year}{clean_date}"
+            if len(clean_date) == 4:  # MM-DD 형태 → 연도는 스크래핑 기준일(base_year)을 사용
+                clean_date = f"{base_year}{clean_date}"
             return clean_date if len(clean_date) == 8 else ""
         except:
             return ""
