@@ -13,6 +13,7 @@ def notify_failure_handler(event, context):
     error_cause = error_info.get("Cause", str(error_info))
 
     from functions.config.dependencies import get_container
+    from functions.shared.models.model import RestaurantType
     notification_service = get_container().get_notification_service()
 
     final_error = Exception(
@@ -21,7 +22,10 @@ def notify_failure_handler(event, context):
         f"상세: {error_cause}"
     )
 
-    asyncio.run(notification_service.send_error_notification(exception=final_error))
+    asyncio.run(notification_service.send_error_notification(
+        exception=final_error,
+        restaurant_type=RestaurantType.DORMITORY
+    ))
 
     logger.info("최종 실패 Slack 알림 전송 완료")
 
