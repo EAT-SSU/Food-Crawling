@@ -49,8 +49,8 @@ class ScrapingService:
                 send_failed_days += 1
                 continue
 
-        # 파싱은 됐으나 모든 날짜의 전송이 실패하면 대상 서버 장애로 보고 재시도를 요청한다
-        if parsed_menus and send_failed_days == len(parsed_menus):
+        # 하루라도 전송에 실패하면 주 전체를 재시도한다. 서버가 멱등이라 이미 성공한 날은 중복 무시되므로 안전하다
+        if send_failed_days > 0:
             raise RetryableApiSendError(
                 target_date=date,
                 restaurant_type=RestaurantType.DORMITORY,
@@ -112,38 +112,50 @@ class ScrapingService:
         if not is_dev:  # 운영 환경
             clients.append(self._prod_api_client)
 
+        # 운영 반영이 목표인 클라이언트만 슬롯 성패를 좌우한다(운영 스케줄=prod, 개발 실행=dev)
+        critical_client = self._prod_api_client if not is_dev else self._dev_api_client
+
         restaurant, date = parsed_menu.restaurant, parsed_menu.date
         sent_count = 0
         failed_slots = []
 
         for slot, menu in parsed_menu.get_successful_slots().items():
-            try:
-                # 시간대와 가격 확인
-                time_slot = self._extract_time_slot(slot, restaurant)
-                if not time_slot:
-                    continue
+            time_slot = self._extract_time_slot(slot, restaurant)
+            if not time_slot:
+                continue
 
-                price = MenuPricing.get_price(restaurant, time_slot)
-                if not price:
-                    continue
+            price = MenuPricing.get_price(restaurant, time_slot)
+            if not price:
+                continue
 
-                menu_items = parsed_menu.menus[slot]
+            menu_items = parsed_menu.menus[slot]
 
-                await asyncio.gather(*[
-                    client.post_menu(date, restaurant, time_slot, menu_items, price)
-                    for client in clients
-                ])
-                sent_count += 1
-                logger.info(
-                    f"API 전송 성공: {restaurant.english_name} "
-                    f"{time_slot.english_name} ({len(menu_items)}개 메뉴)"
-                )
-            except MenuPostException as e:
-                logger.error(f"API 전송 부분 실패: {restaurant.korean_name} {slot} - {e}")
+            results = await asyncio.gather(*[
+                client.post_menu(date, restaurant, time_slot, menu_items, price)
+                for client in clients
+            ], return_exceptions=True)
 
-                parsed_menu.error_slots[slot] = e
+            critical_error = None
+            for client, result in zip(clients, results):
+                if isinstance(result, Exception):
+                    is_critical = client is critical_client
+                    logger.error(
+                        f"API 전송 실패({'critical' if is_critical else 'best-effort'}): "
+                        f"{restaurant.korean_name} {slot} - {result}"
+                    )
+                    if is_critical:
+                        critical_error = result
+
+            if critical_error is not None:
+                parsed_menu.error_slots[slot] = critical_error
                 failed_slots.append(slot)
                 continue
+
+            sent_count += 1
+            logger.info(
+                f"API 전송 성공: {restaurant.english_name} "
+                f"{time_slot.english_name} ({len(menu_items)}개 메뉴)"
+            )
 
         # 전체 성공 여부 업데이트
         if failed_slots:
