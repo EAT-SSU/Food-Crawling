@@ -72,3 +72,12 @@ class RetryableEmptyMenuError(BaseRestaurantException):
         note = f"스크래핑 결과가 비어 있습니다. (수집 일수: {scraped_days}) 사이트 메뉴 미게시로 추정되어 재시도가 필요합니다."
         super().__init__(target_date, restaurant_type, note)
         self.scraped_days = scraped_days
+
+
+class RetryableApiSendError(BaseRestaurantException):
+    """파싱은 성공했으나 API 전송이 전부 실패해(대상 서버 장애) Step Functions 재시도가 필요한 예외"""
+
+    def __init__(self, target_date: str, restaurant_type: RestaurantType, failed_days: int = 0):
+        note = f"파싱된 메뉴가 있으나 API 전송에 전부 실패했습니다. (실패 일수: {failed_days}) 대상 서버 장애로 추정되어 재시도가 필요합니다."
+        super().__init__(target_date, restaurant_type, note)
+        self.failed_days = failed_days

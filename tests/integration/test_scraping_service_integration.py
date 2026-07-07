@@ -48,7 +48,12 @@ def mock_container():
 @pytest.fixture
 def scraping_service(mock_container):
     """테스트용 ScrapingService 인스턴스"""
-    return ScrapingService(mock_container)
+    return ScrapingService(
+        parser=mock_container.get_parser(),
+        prod_api_client=mock_container.get_prod_api_client(),
+        dev_api_client=mock_container.get_dev_api_client(),
+        scraper_factory=mock_container.get_scraper,
+    )
 
 @pytest.mark.asyncio
 async def test_scraping_service_integration_success(scraping_service, mock_container):
@@ -146,7 +151,7 @@ async def test_scraping_service_integration_holiday(scraping_service, mock_conta
     # 스크래퍼가 HolidayException을 발생시키도록 Mock 처리
     # 실제 네트워크를 호출하는 대신, 예외를 직접 발생시키도록 설정
     mock_scraper = AsyncMock()
-    mock_scraper.scrape_menu.side_effect = HolidayException(target_date, "Test Holiday")
+    mock_scraper.scrape_menu.side_effect = HolidayException(target_date, restaurant, "Test Holiday")
 
     # Fixture에 설정된 side_effect를 None으로 초기화해야 return_value가 적용됩니다.
     mock_container.get_scraper.side_effect = None
