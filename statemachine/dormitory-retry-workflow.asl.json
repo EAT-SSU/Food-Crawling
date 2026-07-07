@@ -28,7 +28,7 @@
           "BackoffRate": 2.0
         },
         {
-          "ErrorEquals": ["RetryableEmptyMenuError"],
+          "ErrorEquals": ["RetryableEmptyMenuError", "RetryableApiSendError"],
           "IntervalSeconds": 7200,
           "MaxAttempts": 5,
           "BackoffRate": 1.0
