@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Union, Optional, Dict, Any
+from typing import List, Union, Optional
 
 from functions.shared.models.model import RawMenuData, ParsedMenuData, RestaurantType, TimeSlot
 
@@ -20,10 +20,6 @@ class APIClientInterface(ABC):
     @abstractmethod
     async def post_menu(self, date: str, restaurant: RestaurantType, time_slot: TimeSlot,
                         menus: List[str], price: int) -> bool:
-        pass
-
-    @abstractmethod
-    async def get_menu(self, date: str, restaurant: RestaurantType, time_slot: TimeSlot) -> Optional[Dict[str, Any]]:
         pass
 
 
