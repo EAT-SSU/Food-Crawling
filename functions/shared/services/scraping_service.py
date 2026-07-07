@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import Optional, List
 
-from functions.shared.models.exceptions import MenuPostException
+from functions.shared.models.exceptions import MenuPostException, RetryableApiSendError
 from functions.shared.models.model import RestaurantType, TimeSlot, MenuPricing, ParsedMenuData, RawMenuData
 from functions.shared.repositories.clients.spring_api_client import SpringAPIClient
 from functions.shared.services.time_slot_strategy import TimeSlotStrategyFactory
@@ -40,12 +40,22 @@ class ScrapingService:
         parsed_menus = await self.scrape_dormitory_weekly(date)
 
         # 2. API 전송 단계 (각 날짜별) - 한 날짜의 전송 실패가 나머지 주를 중단시키지 않도록 격리
+        send_failed_days = 0
         for parsed_menu in parsed_menus:
             try:
                 await self.send_to_api(parsed_menu, is_dev)
             except MenuPostException as e:
                 logger.error(f"기숙사식당({parsed_menu.date}) API 전송 실패: {e}")
+                send_failed_days += 1
                 continue
+
+        # 파싱은 됐으나 모든 날짜의 전송이 실패하면 대상 서버 장애로 보고 재시도를 요청한다
+        if parsed_menus and send_failed_days == len(parsed_menus):
+            raise RetryableApiSendError(
+                target_date=date,
+                restaurant_type=RestaurantType.DORMITORY,
+                failed_days=send_failed_days,
+            )
 
         logger.info(f"기숙사식당 주간 메뉴 처리 완료: {len(parsed_menus)}일치")
         return parsed_menus
@@ -120,7 +130,7 @@ class ScrapingService:
                 menu_items = parsed_menu.menus[slot]
 
                 await asyncio.gather(*[
-                    self._post_menu_if_absent(client, date, restaurant, time_slot, menu_items, price)
+                    client.post_menu(date, restaurant, time_slot, menu_items, price)
                     for client in clients
                 ])
                 sent_count += 1
@@ -129,10 +139,8 @@ class ScrapingService:
                     f"{time_slot.english_name} ({len(menu_items)}개 메뉴)"
                 )
             except MenuPostException as e:
-                error_msg = f"API 전송 부분 실패: {restaurant.korean_name} {slot.english_name} - {e}"
-                logger.error(error_msg)
+                logger.error(f"API 전송 부분 실패: {restaurant.korean_name} {slot} - {e}")
 
-                # API 전송 실패를 ParsedMenuData에 기록
                 parsed_menu.error_slots[slot] = e
                 failed_slots.append(slot)
                 continue
@@ -154,15 +162,6 @@ class ScrapingService:
             f"API 전송 완료: {restaurant.korean_name} {date} - "
             f"{sent_count}개 슬롯 전송 성공, {len(failed_slots)}개 슬롯 실패"
         )
-
-    async def _post_menu_if_absent(self, client: SpringAPIClient, date: str, restaurant: RestaurantType,
-                                   time_slot: TimeSlot, menu_items: List[str], price: int) -> bool:
-        # 백엔드가 멱등하지 않으므로 재시도/수동 재호출 시 중복 POST를 막기 위해 먼저 존재 여부를 확인한다
-        existing = await client.get_menu(date, restaurant, time_slot)
-        if existing is not None:
-            logger.info(f"이미 등록된 메뉴, 전송 생략: {restaurant.english_name} {time_slot.english_name} {date}")
-            return True
-        return await client.post_menu(date, restaurant, time_slot, menu_items, price)
 
     # === 내부 구현 메서드들 ===
 
