@@ -33,6 +33,8 @@ packages = ["functions"]
 markers = [
     "unit: mark a test as a unit test.",
     "integration: mark a test as an integration test.",
+    "e2e: mark a test as an end-to-end test (requires env vars).",
+    "real_http: mark a test that performs real network calls.",
 ]
 asyncio_mode = "auto"
 
