@@ -1,0 +1,30 @@
+name: test
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run deterministic tests
+        run: >-
+          uv run pytest
+          tests/test_clients.py
+          tests/test_dependencies.py
+          tests/test_time_slot_strategy.py
+          tests/test_utils.py
+          -v
