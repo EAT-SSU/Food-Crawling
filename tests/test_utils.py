@@ -1,6 +1,8 @@
 from datetime import datetime
 from unittest.mock import patch
 
+from bs4 import Tag
+
 from functions.shared.utils.date_utils import get_next_weekdays, get_current_weekdays
 from functions.shared.utils.parsing_utils import (
     parse_table_to_dict, strip_string_from_html
@@ -78,3 +80,5 @@ class TestParsingUtils:
         assert "중식1" in result
         assert "석식1" in result
         assert len(result) == 2
+        assert isinstance(result["중식1"], Tag)
+        assert result["중식1"].name == "tr"
