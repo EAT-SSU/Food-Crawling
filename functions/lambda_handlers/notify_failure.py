@@ -1,38 +1,110 @@
 import asyncio
 import json
-import logging
 
-logger = logging.getLogger(__name__)
+from functions.lambda_handlers.handler_support import (
+    handler_observation,
+    parse_handler_event,
+    raise_sanitized_handler_failure,
+)
+from functions.shared.models.model import (
+    DateProcessingSummary,
+    ProcessingOutcome,
+    RestaurantType,
+    SlotProcessingResult,
+)
+from functions.shared.observability import emit_event
+from functions.shared.utils.date_utils import WeekType, get_current_weekdays
+
+
+_RESTAURANTS = {item.english_name: item for item in RestaurantType}
+_LAMBDA_ERRORS = {
+    "Lambda.ServiceException",
+    "Lambda.AWSLambdaException",
+    "Lambda.SdkClientException",
+    "Lambda.TooManyRequestsException",
+}
+_RETRY_OUTCOMES = {
+    "RetryableEmptyMenuError": (
+        ProcessingOutcome.AMBIGUOUS_EMPTY,
+        "RETRY_EXHAUSTED_EMPTY",
+        "source_fetch",
+    ),
+    "RetryableApiSendError": (
+        ProcessingOutcome.API_FAILURE,
+        "RETRY_EXHAUSTED_API",
+        "menu_post",
+    ),
+}
 
 
 def notify_failure_handler(event, context):
-    logger.info(f"NotifyFailure 이벤트 수신: {json.dumps(event, ensure_ascii=False, default=str)}")
-
-    error_info = event.get("error", {})
-    error_type = error_info.get("Error", "UnknownError")
-    error_cause = error_info.get("Cause", str(error_info))
-
-    from functions.config.dependencies import get_container
-    from functions.shared.models.model import RestaurantType
-    notification_service = get_container().get_notification_service()
-
-    final_error = Exception(
-        f"[기숙사 최종 실패] 재시도 후에도 메뉴를 가져오지 못했습니다.\n"
-        f"에러 타입: {error_type}\n"
-        f"상세: {error_cause}"
+    payload = event if isinstance(event, dict) else {}
+    restaurant_value = payload.get("restaurant")
+    restaurant = (
+        _RESTAURANTS.get(restaurant_value, RestaurantType.DORMITORY)
+        if isinstance(restaurant_value, str)
+        else RestaurantType.DORMITORY
+    )
+    request = parse_handler_event(payload)
+    target_date = request.target_date or get_current_weekdays(WeekType.FULL_WEEK)[0]
+    raw_error_type = payload.get("error_type")
+    error_type = raw_error_type if isinstance(raw_error_type, str) else "UnknownError"
+    normalized_error_type = (
+        error_type
+        if error_type in _RETRY_OUTCOMES or error_type in _LAMBDA_ERRORS
+        else "UnknownError"
     )
 
-    asyncio.run(notification_service.send_error_notification(
-        exception=final_error,
-        restaurant_type=RestaurantType.DORMITORY
-    ))
+    with handler_observation(event, context, restaurant, "final-notifier") as observed:
+        mapped = _RETRY_OUTCOMES.get(normalized_error_type)
+        if mapped:
+            outcome, reason_code, stage = mapped
+            result = SlotProcessingResult(
+                slot="__date__",
+                stage=stage,
+                outcome=outcome,
+                reason_code=reason_code,
+                error_type=normalized_error_type,
+            )
+            summary = DateProcessingSummary(
+                date=target_date,
+                restaurant=restaurant,
+                menus={},
+                slot_results={result.slot: result},
+                date_outcome=outcome,
+                reason_code=reason_code,
+            )
+        else:
+            summary = DateProcessingSummary(
+                date=target_date,
+                restaurant=restaurant,
+                menus={},
+                slot_results={},
+                system_error=True,
+            )
 
-    logger.info("최종 실패 Slack 알림 전송 완료")
+        from functions.config.dependencies import get_container
 
-    return {
-        'statusCode': 200,
-        'body': json.dumps({'message': 'final failure notified', 'error_type': error_type}, ensure_ascii=False)
-    }
+        notification_service = get_container().get_notification_service()
+        asyncio.run(notification_service.send_date_summary(summary))
+        emit_event(
+            "INFO",
+            "final_failure_notification_sent",
+            "slack_notify",
+            date=target_date,
+            **{"error.type": normalized_error_type},
+        )
+        return {
+            "statusCode": 200,
+            "body": json.dumps(
+                {
+                    "message": "final failure notified",
+                    "error_type": normalized_error_type,
+                },
+                ensure_ascii=False,
+            ),
+        }
+    raise_sanitized_handler_failure(observed)
 
 
 lambda_handler = notify_failure_handler
