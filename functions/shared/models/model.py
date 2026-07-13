@@ -4,6 +4,22 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Any, Optional
 
+from functions.shared.observability import sanitize_exception
+
+
+_SAFE_LEGACY_ERROR_SLOT_MESSAGES = frozenset({"파싱 실패", "메뉴 파싱 실패"})
+_UNKNOWN_ERROR_SLOT_FALLBACK = "처리 실패"
+
+
+def _serialize_error_slot(value: object) -> object:
+    if isinstance(value, BaseException):
+        if hasattr(value, "safe_reason"):
+            return sanitize_exception(value)
+        return type(value).__name__
+    if isinstance(value, str) and value in _SAFE_LEGACY_ERROR_SLOT_MESSAGES:
+        return value
+    return _UNKNOWN_ERROR_SLOT_FALLBACK
+
 
 class RestaurantType(Enum):
     HAKSIK = ("학생식당", "HAKSIK", 1)
@@ -17,7 +33,7 @@ class RestaurantType(Enum):
         self.soongguri_rcd = soongguri_rcd
 
     @property
-    def lambda_base_url(self) -> str:
+    def lambda_base_url(self) -> Optional[str]:
         """AWS Lambda 기본 URL"""
         url_map = {
             RestaurantType.DODAM: os.getenv("DODAM_LAMBDA_BASE_URL"),
@@ -39,6 +55,14 @@ class TimeSlot(Enum):
 
     def __init__(self, english_name: str):
         self.english_name = english_name
+
+
+class ProcessingOutcome(str, Enum):
+    SUCCESS = "SUCCESS"
+    EXPECTED_EMPTY = "EXPECTED_EMPTY"
+    AMBIGUOUS_EMPTY = "AMBIGUOUS_EMPTY"
+    PARSER_FAILURE = "PARSER_FAILURE"
+    API_FAILURE = "API_FAILURE"
 
 
 class MenuPricing:
@@ -80,6 +104,27 @@ class RawMenuData:
     date: str
     restaurant: RestaurantType
     menu_texts: Dict[str, str]  # 키: 메뉴 슬롯(ex: '중식1'), 값: 텍스트 내용
+    slot_results: Dict[str, "SlotProcessingResult"] = field(default_factory=dict)
+
+
+@dataclass
+class SlotProcessingResult:
+    slot: str
+    stage: str
+    outcome: ProcessingOutcome
+    reason_code: str
+    source_length: Optional[int] = None
+    source_sha256: Optional[str] = None
+    duration_ms: Optional[float] = None
+    retry_count: Optional[int] = None
+    error_type: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            key: value.value if isinstance(value, Enum) else value
+            for key, value in self.__dict__.items()
+            if value is not None
+        }
 
 
 @dataclass
@@ -89,7 +134,8 @@ class ParsedMenuData:
     restaurant: RestaurantType
     menus: Dict[str, List[str]]  # 키: 메뉴 슬롯, 값: 메뉴 항목 리스트
     success: bool = True
-    error_slots: Dict[str, Exception] = field(default_factory=dict)  # 키: 실패한 슬롯, 값: 오류 메시지
+    error_slots: Dict[str, Any] = field(default_factory=dict)  # 키: 실패한 슬롯, 값: 오류 메시지
+    slot_results: Dict[str, SlotProcessingResult] = field(default_factory=dict)
 
     def get_successful_slots(self) -> Dict[str, List[str]]:
         """성공적으로 파싱된 식당 key 목록 (GPT에서 오류도 안나고 menu가 빈칸이 아닌 것들)"""
@@ -113,16 +159,31 @@ class ParsedMenuData:
         total = len(self.menus)
         return 0 < len(successful) < total
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> Dict[str, Any]:
         """딕셔너리로 변환 (JSON 직렬화용)"""
         return {
             'date': self.date,
             'restaurant': str(self.restaurant),
             'menus': self.menus,
             'success': self.success,
-            'error_slots': {k: str(v) for k, v in self.error_slots.items()}  # Exception을 문자열로 변환
+            'error_slots': {
+                k: _serialize_error_slot(v)
+                for k, v in self.error_slots.items()
+            },
+            'slot_results': {k: v.to_dict() for k, v in self.slot_results.items()},
         }
 
+
+
+@dataclass
+class DateProcessingSummary:
+    date: str
+    restaurant: RestaurantType
+    menus: Dict[str, List[str]]
+    slot_results: Dict[str, SlotProcessingResult]
+    date_outcome: Optional[ProcessingOutcome] = None
+    reason_code: Optional[str] = None
+    system_error: bool = False
 
 
 @dataclass
@@ -146,6 +207,8 @@ class ResponseBuilder:
         if status_code is None:
             status_code = 200 if is_success else 400
 
+        serialized_menu = parsed_menu.to_dict()
+
         return {
             'statusCode': status_code,
             'headers': {'Content-Type': 'application/json; charset=utf-8'},
@@ -154,7 +217,7 @@ class ResponseBuilder:
                 'date': parsed_menu.date,
                 'restaurant': parsed_menu.restaurant.korean_name,
                 'menus': parsed_menu.menus,
-                'parsing_errors': parsed_menu.error_slots if parsed_menu.error_slots else None,
+                'parsing_errors': serialized_menu['error_slots'] if parsed_menu.error_slots else None,
                 'message': message or f"{parsed_menu.restaurant.korean_name} 메뉴 처리 완료",
                 'special_note': special_note
             }, ensure_ascii=False)
@@ -175,7 +238,7 @@ class ResponseBuilder:
                 'menus': {},
                 'parsing_errors': None,
                 'message': message or f"{restaurant.korean_name if restaurant else 'Unknown'} 메뉴 처리 실패",
-                'error': str(error) if error else "Unknown error",
+                'error': sanitize_exception(error) if error else {"type": "UnknownError", "frames": []},
                 'error_type': type(error).__name__ if error else "UnknownError"
             }, ensure_ascii=False)
         }
