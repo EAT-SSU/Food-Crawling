@@ -1,10 +1,8 @@
-import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, List
 
 from functions.shared.models.model import TimeSlot, RestaurantType
-
-logger = logging.getLogger(__name__)
+from functions.shared.observability import emit_event
 
 
 class TimeSlotExtractionStrategy(ABC):
@@ -34,10 +32,24 @@ class HaksikTimeSlotStrategy(TimeSlotExtractionStrategy):
             return TimeSlot.LUNCH
         elif "석식" in menu_slot:
             # 학생식당 특수 케이스: 석식 → 1000원 조식
-            logger.info(f"학생식당 특수 케이스: '{menu_slot}'을 1000원 조식으로 처리")
+            emit_event(
+                "INFO",
+                "time_slot_remapped",
+                "time_slot_extract",
+                restaurant=RestaurantType.HAKSIK.english_name,
+                outcome="SUCCESS",
+                reason_code="DINNER_TO_ONE_DOLLAR_MORNING",
+            )
             return TimeSlot.ONE_DOLLAR_MORNING
         else:
-            logger.warning(f"알 수 없는 학생식당 메뉴 슬롯: {menu_slot}")
+            emit_event(
+                "WARNING",
+                "time_slot_unsupported",
+                "time_slot_extract",
+                restaurant=RestaurantType.HAKSIK.english_name,
+                outcome="AMBIGUOUS_EMPTY",
+                reason_code="UNKNOWN_SLOT",
+            )
             return None
 
     def get_supported_time_slots(self) -> List[TimeSlot]:
@@ -52,14 +64,28 @@ class DodamTimeSlotStrategy(TimeSlotExtractionStrategy):
 
     def extract_time_slot(self, menu_slot: str) -> Optional[TimeSlot]:
         if "조식" in menu_slot:
-            logger.info(f"도담식당은 조식을 운영하지 않습니다: '{menu_slot}' 무시")
+            emit_event(
+                "INFO",
+                "time_slot_unsupported",
+                "time_slot_extract",
+                restaurant=RestaurantType.DODAM.english_name,
+                outcome="EXPECTED_EMPTY",
+                reason_code="BREAKFAST_NOT_SUPPORTED",
+            )
             return None
         elif "중식" in menu_slot:
             return TimeSlot.LUNCH
         elif "석식" in menu_slot:
             return TimeSlot.DINNER
         else:
-            logger.warning(f"알 수 없는 도담식당 메뉴 슬롯: {menu_slot}")
+            emit_event(
+                "WARNING",
+                "time_slot_unsupported",
+                "time_slot_extract",
+                restaurant=RestaurantType.DODAM.english_name,
+                outcome="AMBIGUOUS_EMPTY",
+                reason_code="UNKNOWN_SLOT",
+            )
             return None
 
     def get_supported_time_slots(self) -> List[TimeSlot]:
@@ -76,7 +102,14 @@ class FacultyTimeSlotStrategy(TimeSlotExtractionStrategy):
         if "중식" in menu_slot:
             return TimeSlot.LUNCH
         else:
-            logger.warning(f"교직원식당은 점심만 운영됩니다. 알 수 없는 메뉴 슬롯: {menu_slot}")
+            emit_event(
+                "WARNING",
+                "time_slot_unsupported",
+                "time_slot_extract",
+                restaurant=RestaurantType.FACULTY.english_name,
+                outcome="AMBIGUOUS_EMPTY",
+                reason_code="UNKNOWN_SLOT",
+            )
             return None
 
     def get_supported_time_slots(self) -> List[TimeSlot]:
@@ -91,14 +124,28 @@ class DormitoryTimeSlotStrategy(TimeSlotExtractionStrategy):
 
     def extract_time_slot(self, menu_slot: str) -> Optional[TimeSlot]:
         if "조식" in menu_slot:
-            logger.info(f"기숙사식당은 조식을 운영하지 않습니다: '{menu_slot}' 무시")
+            emit_event(
+                "INFO",
+                "time_slot_unsupported",
+                "time_slot_extract",
+                restaurant=RestaurantType.DORMITORY.english_name,
+                outcome="EXPECTED_EMPTY",
+                reason_code="BREAKFAST_NOT_SUPPORTED",
+            )
             return None
         elif "중식" in menu_slot:
             return TimeSlot.LUNCH
         elif "석식" in menu_slot:
             return TimeSlot.DINNER
         else:
-            logger.warning(f"알 수 없는 기숙사식당 메뉴 슬롯: {menu_slot}")
+            emit_event(
+                "WARNING",
+                "time_slot_unsupported",
+                "time_slot_extract",
+                restaurant=RestaurantType.DORMITORY.english_name,
+                outcome="AMBIGUOUS_EMPTY",
+                reason_code="UNKNOWN_SLOT",
+            )
             return None
 
     def get_supported_time_slots(self) -> List[TimeSlot]:

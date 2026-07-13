@@ -27,4 +27,15 @@ jobs:
           tests/test_dependencies.py
           tests/test_time_slot_strategy.py
           tests/test_utils.py
-          -v
+          tests/test_observability.py
+          tests/test_exception_sanitization.py
+          tests/test_template_contract.py
+          tests/test_slack_client.py
+          tests/test_source_classification.py
+          tests/test_client_observability.py
+          tests/test_scheduling_outcomes.py
+          tests/integration/test_scheduling_service_integration.py
+          tests/test_lambda_handlers.py
+          tests/test_notify_failure.py
+          tests/test_state_machine_contract.py
+          -q
