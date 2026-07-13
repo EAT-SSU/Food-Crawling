@@ -290,6 +290,23 @@ def run_single_scraping_handler(
     raise_sanitized_handler_failure(request)
 
 
+async def _dormitory_scrape_and_notify(
+    scraping_service,
+    notification_service,
+    date: str,
+    restaurant: RestaurantType,
+) -> tuple[list[ParsedMenuData] | None, Exception | None]:
+    try:
+        parsed_menus: list[ParsedMenuData] = await scraping_service.scrape_and_process_dormitory(date)
+    except KNOWN_DOMAIN_ERRORS as domain_error:
+        summary = _summary_from_domain_error(domain_error, date, restaurant)
+        await notification_service.send_date_summary(summary)
+        return None, domain_error
+    for parsed_menu in parsed_menus:
+        await notification_service.send_date_summary(_summary_from_parsed(parsed_menu))
+    return parsed_menus, None
+
+
 def run_dormitory_scraping_handler(event: object, context) -> dict[str, object]:
     restaurant = RestaurantType.DORMITORY
     with handler_observation(event, context, restaurant, "scraping") as request:
@@ -299,27 +316,20 @@ def run_dormitory_scraping_handler(event: object, context) -> dict[str, object]:
         container = get_container()
         scraping_service = container.get_scraping_service()
         notification_service = container.get_notification_service()
-        try:
-            parsed_menus = asyncio.run(
-                scraping_service.scrape_and_process_dormitory(date)
-            )
-        except KNOWN_DOMAIN_ERRORS as error:
-            summary = _summary_from_domain_error(error, date, restaurant)
-            asyncio.run(notification_service.send_date_summary(summary))
+
+        parsed_menus, domain_error = asyncio.run(
+            _dormitory_scrape_and_notify(scraping_service, notification_service, date, restaurant)
+        )
+
+        if domain_error is not None:
             return ResponseBuilder.create_error_response(
                 date=date,
                 restaurant=restaurant,
-                error=error,
+                error=domain_error,
                 status_code=400,
             )
 
-        for parsed_menu in parsed_menus:
-            asyncio.run(
-                notification_service.send_date_summary(
-                    _summary_from_parsed(parsed_menu)
-                )
-            )
-
+        assert parsed_menus is not None
         combined_menus = {
             f"{parsed_menu.date}_{slot}": items
             for parsed_menu in parsed_menus

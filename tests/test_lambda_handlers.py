@@ -296,3 +296,73 @@ def test_dormitory_retryable_error_identity_survives_handler_boundary():
             )
 
     assert raised.value is retry_error
+
+
+def test_dormitory_scraping_handler_uses_single_asyncio_run():
+    import asyncio as _asyncio
+
+    container = _container("20260713")
+    container.scraping.scrape_and_process_dormitory = AsyncMock(
+        return_value=[
+            _parsed("20260713", RestaurantType.DORMITORY),
+            _parsed("20260714", RestaurantType.DORMITORY),
+        ]
+    )
+
+    asyncio_run_call_count = 0
+    original_asyncio_run = _asyncio.run
+
+    def counting_asyncio_run(coro, **kwargs):
+        nonlocal asyncio_run_call_count
+        asyncio_run_call_count += 1
+        return original_asyncio_run(coro, **kwargs)
+
+    with (
+        patch("functions.config.dependencies.get_container", return_value=container),
+        patch(
+            "functions.lambda_handlers.handler_support.asyncio.run",
+            side_effect=counting_asyncio_run,
+        ),
+    ):
+        response = dormitory_view({"target_date": "20260713"}, _Context("request"))
+
+    assert response["statusCode"] == 200
+    assert asyncio_run_call_count == 1, (
+        f"Expected exactly 1 asyncio.run() call for the combined scrape-and-notify "
+        f"workflow, but got {asyncio_run_call_count}."
+    )
+    assert container.notification.send_date_summary.await_count == 2
+
+
+def test_dormitory_scraping_handler_domain_error_uses_single_asyncio_run():
+    import asyncio as _asyncio
+    from functions.shared.models.exceptions import MenuFetchException
+
+    container = _container()
+    container.scraping.scrape_and_process_dormitory.side_effect = MenuFetchException(
+        "20260713", RestaurantType.DORMITORY
+    )
+
+    asyncio_run_call_count = 0
+    original_asyncio_run = _asyncio.run
+
+    def counting_asyncio_run(coro, **kwargs):
+        nonlocal asyncio_run_call_count
+        asyncio_run_call_count += 1
+        return original_asyncio_run(coro, **kwargs)
+
+    with (
+        patch("functions.config.dependencies.get_container", return_value=container),
+        patch(
+            "functions.lambda_handlers.handler_support.asyncio.run",
+            side_effect=counting_asyncio_run,
+        ),
+    ):
+        response = dormitory_view({"target_date": "20260713"}, _Context("request"))
+
+    assert response["statusCode"] == 400
+    assert asyncio_run_call_count == 1, (
+        f"Expected exactly 1 asyncio.run() call even on domain error path, "
+        f"but got {asyncio_run_call_count}."
+    )
+    container.notification.send_date_summary.assert_awaited_once()
