@@ -1,32 +1,20 @@
 from typing import Dict, Any
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 
 def parse_table_to_dict(html_content: str) -> Dict[str, Any]:
     """HTML 문자열에서 테이블을 파싱하여 딕셔너리로 반환"""
     soup = BeautifulSoup(html_content, "html.parser")
     tr_list = soup.find_all('tr')
-    menu_nm_dict = {}
+    menu_nm_dict: Dict[str, Tag] = {}
 
     for tr_tag in tr_list:
-        td_tag = tr_tag.find('td', {'class': 'menu_nm'})
-        if td_tag:
-            menu_nm_dict[td_tag.text] = tr_tag
-
-    return menu_nm_dict
-
-
-def parse_table_to_dict(html_content: str) -> Dict[str, Any]:
-    """HTML 문자열에서 테이블을 파싱하여 딕셔너리로 반환"""
-    soup = BeautifulSoup(html_content, "html.parser")
-    tr_list = soup.find_all('tr')
-    menu_nm_dict = {}
-
-    for tr_tag in tr_list:
-        td_tag = tr_tag.find('td', {'class': 'menu_nm'})
-        if td_tag:
-            menu_nm_dict[td_tag.text] = tr_tag
+        if not isinstance(tr_tag, Tag):
+            continue
+        td_tag = tr_tag.find('td', attrs={'class': 'menu_nm'})
+        if isinstance(td_tag, Tag):
+            menu_nm_dict[td_tag.get_text()] = tr_tag
 
     return menu_nm_dict
 
