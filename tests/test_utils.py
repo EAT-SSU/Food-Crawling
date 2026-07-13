@@ -82,3 +82,29 @@ class TestParsingUtils:
         assert len(result) == 2
         assert isinstance(result["중식1"], Tag)
         assert result["중식1"].name == "tr"
+
+    def test_parse_table_to_dict_strips_whitespace_from_keys(self):
+        """menu_nm td의 공백/개행이 포함된 텍스트를 키로 사용할 때 strip 처리 테스트"""
+        html_content = """
+        <table>
+            <tr>
+                <td class="menu_nm">
+                    중식1
+                </td>
+                <td>김치찌개, 밥, 김치</td>
+            </tr>
+            <tr>
+                <td class="menu_nm">&#10;석식1&#10;</td>
+                <td>불고기, 밥, 된장국</td>
+            </tr>
+        </table>
+        """
+
+        result = parse_table_to_dict(html_content)
+
+        # Keys must be stripped - no leading/trailing whitespace or newlines
+        assert "중식1" in result, f"Expected '중식1' in keys, got: {list(result.keys())}"
+        assert "석식1" in result, f"Expected '석식1' in keys, got: {list(result.keys())}"
+        assert len(result) == 2
+        assert isinstance(result["중식1"], Tag)
+        assert result["중식1"].name == "tr"

@@ -14,7 +14,7 @@ def parse_table_to_dict(html_content: str) -> Dict[str, Any]:
             continue
         td_tag = tr_tag.find('td', attrs={'class': 'menu_nm'})
         if isinstance(td_tag, Tag):
-            menu_nm_dict[td_tag.get_text()] = tr_tag
+            menu_nm_dict[td_tag.get_text(strip=True)] = tr_tag
 
     return menu_nm_dict
 
