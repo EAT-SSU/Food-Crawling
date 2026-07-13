@@ -1,4 +1,5 @@
 import os
+from typing import cast
 
 import pytest
 
@@ -56,8 +57,12 @@ class TestDependencyContainer:
         container = get_container()
 
         assert container.get_parser() is not None
-        assert container.get_prod_api_client() is not None
-        assert container.get_dev_api_client() is not None
+        prod_client = container.get_prod_api_client()
+        dev_client = container.get_dev_api_client()
+        assert prod_client is not None
+        assert dev_client is not None
+        assert prod_client.environment == "prod"
+        assert dev_client.environment == "dev"
         assert container.get_slack_client() is not None
 
     def test_services_not_none(self):
@@ -84,4 +89,4 @@ class TestDependencyContainer:
         container = get_container()
 
         with pytest.raises(ValueError):
-            container.get_scraper("INVALID_TYPE")
+            container.get_scraper(cast(RestaurantType, cast(object, "INVALID_TYPE")))

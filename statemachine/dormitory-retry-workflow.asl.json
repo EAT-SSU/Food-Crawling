@@ -8,11 +8,10 @@
       "Parameters": {
         "FunctionName": "${DormitorySchedulingFunctionArn}",
         "Payload": {
-          "httpMethod": "GET",
-          "path": "/schedule/dormitory",
-          "queryStringParameters": {
-            "delayed_schedule": "false"
-          }
+          "trigger": "step_functions",
+          "execution_id.$": "$$.Execution.Id",
+          "retry_count.$": "$$.State.RetryCount",
+          "delayed_schedule": false
         }
       },
       "Retry": [
@@ -48,7 +47,12 @@
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${NotifyFailureFunctionArn}",
-        "Payload.$": "$"
+        "Payload": {
+          "trigger": "step_functions",
+          "execution_id.$": "$$.Execution.Id",
+          "restaurant": "DORMITORY",
+          "error_type.$": "$.error.Error"
+        }
       },
       "End": true
     }
