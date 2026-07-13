@@ -1,7 +1,6 @@
-import logging
-
 from functions.config.settings import Settings
 from functions.shared.models.model import RestaurantType
+from functions.shared.observability import initialize_observation_logger
 
 
 class DependencyContainer:
@@ -32,12 +31,12 @@ class DependencyContainer:
     def get_prod_api_client(self):
         """프로덕션 API 클라이언트 생성"""
         from functions.shared.repositories.clients.spring_api_client import SpringAPIClient
-        return SpringAPIClient(self._settings.API_BASE_URL)
+        return SpringAPIClient(self._settings.API_BASE_URL, environment="prod")
 
     def get_dev_api_client(self):
         """개발 API 클라이언트 생성"""
         from functions.shared.repositories.clients.spring_api_client import SpringAPIClient
-        return SpringAPIClient(self._settings.DEV_API_BASE_URL)
+        return SpringAPIClient(self._settings.DEV_API_BASE_URL, environment="dev")
 
     def get_slack_client(self):
         """Slack 클라이언트 생성"""
@@ -92,8 +91,8 @@ _container = None
 def get_container() -> DependencyContainer:
     """전역 DI 컨테이너 반환"""
     global _container
+    _ = initialize_observation_logger()
     if _container is None:
-        logging.getLogger().setLevel(logging.INFO)
         from functions.config.settings import Settings
         settings = Settings.from_env()
         _container = DependencyContainer(settings)
