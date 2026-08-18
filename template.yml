@@ -41,6 +41,7 @@ Resources:
         - arm64
     Metadata:
       BuildMethod: python3.11
+      BuildArchitecture: arm64
 
   # === Scraping Functions ===
   # 하루짜리 스크래핑 함수들 (백업용)

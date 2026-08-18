@@ -109,6 +109,10 @@ def test_preserves_all_nine_functions_and_global_configuration():
     assert "Timeout: 300" in template
     assert "MemorySize: 512" in template
 
+    layer = resources["PythonRequirementsLayer"]
+    assert "CompatibleArchitectures:\n        - arm64" in layer
+    assert "BuildArchitecture: arm64" in layer
+
     for function_id, handler in FUNCTION_HANDLERS.items():
         block = resources[function_id]
         assert f"Handler: {handler}" in block
