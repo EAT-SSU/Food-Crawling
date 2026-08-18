@@ -375,27 +375,64 @@ def test_empty_source_records_bypass_gpt_and_use_safe_summary():
     assert slack.await_args.args[1]["empty_reasons"] == {"중식1": "CLOSED_MARKER"}
 
 
-def test_dormitory_schedule_fetches_full_week_once():
+def test_partial_dormitory_week_retries_before_ai_spring_or_slack():
     dates = [f"202607{day:02d}" for day in range(13, 20)]
-    scrape = AsyncMock(return_value=[_raw(date, "DORMITORY") for date in dates])
+    scrape = AsyncMock(return_value=[_raw(date, "DORMITORY") for date in dates[:-1]])
+    interpret = AsyncMock()
+    publish = AsyncMock()
+    slack = AsyncMock()
+
     with (
         patch.object(handler, "_week_dates", return_value=dates),
         patch.object(handler, "scrape", scrape),
-        patch.object(
-            handler,
-            "interpret_menu",
-            AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
-        ),
-        patch.object(handler, "publish_menu", AsyncMock(return_value=_accepted())),
-        patch.object(handler, "notify_slack", AsyncMock()),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", slack),
     ):
-        handler.lambda_handler({"operation": "schedule_dormitory"}, _Context())
+        with pytest.raises(handler.RetryableEmptyMenuError) as raised:
+            handler.lambda_handler({"operation": "schedule_dormitory"}, _Context())
+
+    assert raised.value.target_date == dates[0]
+    interpret.assert_not_awaited()
+    publish.assert_not_awaited()
+    slack.assert_not_awaited()
+
+
+def test_complete_dormitory_week_including_closed_date_keeps_current_behavior():
+    dates = [f"202607{day:02d}" for day in range(13, 20)]
+    closed_record = {
+        "date": dates[-1],
+        "restaurant": "DORMITORY",
+        "source_slot": "중식1",
+        "raw_text": "미운영",
+        "source_english": (),
+        "outcome": "EXPECTED_EMPTY",
+        "reason_code": "CLOSED_MARKER",
+    }
+    scrape = AsyncMock(
+        return_value=[_raw(date, "DORMITORY") for date in dates[:-1]] + [closed_record]
+    )
+    interpret = AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []})
+    publish = AsyncMock(return_value=_accepted())
+    slack = AsyncMock()
+    with (
+        patch.object(handler, "_week_dates", return_value=dates),
+        patch.object(handler, "scrape", scrape),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        response = handler.lambda_handler({"operation": "schedule_dormitory"}, _Context())
 
     scrape.assert_awaited_once_with(
         handler.load_operation_config("schedule_dormitory"),
         dates[0],
         requested_dates=dates,
     )
+    assert response["statusCode"] == 200
+    assert interpret.await_count == 6
+    assert publish.await_count == 12
+    assert slack.await_count == 7
 
 
 def test_direct_dormitory_fetches_seven_dates_once_and_aggregates_weekly_response():

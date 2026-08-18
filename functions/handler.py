@@ -287,8 +287,14 @@ async def _process_source_date(
                 "reason_code": reason_code,
             }
         ]
-    if dormitory_retry and not raw_meals:
-        raise RetryableEmptyMenuError(target_date)
+    if dormitory_retry and requested_dates is not None:
+        represented_dates = {
+            meal_date
+            for raw_meal in raw_meals
+            if (meal_date := _date(raw_meal.get("date"))) is not None
+        }
+        if set(requested_dates) - represented_dates:
+            raise RetryableEmptyMenuError(target_date)
 
     summaries: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"menus": {}, "warnings": [], "errors": [], "empty_reasons": {}}
