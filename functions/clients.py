@@ -9,6 +9,17 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fi
 _HTTP_TIMEOUT_SECONDS = 10
 _RESPONSE_PARSE_WARNING = "Spring accepted the meal but returned malformed JSON"
 
+_SAFE_EMPTY_REASONS = {
+    "HOLIDAY": "휴무일",
+    "CLOSED_MARKER": "미운영",
+    "SOURCE_EMPTY": "메뉴 미게시 또는 원본 누락",
+    "SOURCE_SCHEMA_CHANGED": "메뉴 원본 구조 변경",
+    "MISSING_DATE_HEADER": "메뉴 원본 구조 변경",
+    "MISSING_DATE_CELL": "메뉴 원본 구조 변경",
+    "MISSING_SLOT_COLUMN": "메뉴 원본 구조 변경",
+    "EMPTY_CELL": "메뉴 미게시 또는 원본 누락",
+}
+
 
 class SpringPublishError(RuntimeError):
     """A Spring request failed before it was known to be accepted."""
@@ -160,3 +171,56 @@ async def send_slack_text(*, webhook_url: str, text: str) -> None:
         raise
     except Exception as error:
         raise SlackNotificationError("Slack notification failed") from error
+
+
+def format_slack_text(notification: Mapping[str, object]) -> str:
+    """Render only allowlisted orchestration fields for Slack."""
+    notification_type = notification.get("type")
+    date = notification.get("date") if isinstance(notification.get("date"), str) else "unknown"
+    restaurant = (
+        notification.get("restaurant")
+        if isinstance(notification.get("restaurant"), str)
+        else "UNKNOWN"
+    )
+    if notification_type == "final_failure":
+        allowed_errors = {
+            "RetryableEmptyMenuError": "메뉴 미게시",
+            "RetryableApiSendError": "메뉴 저장 실패",
+            "Lambda.ServiceException": "Lambda 서비스 오류",
+            "Lambda.AWSLambdaException": "Lambda 실행 오류",
+            "Lambda.SdkClientException": "Lambda 호출 오류",
+            "Lambda.TooManyRequestsException": "Lambda 요청 제한",
+        }
+        raw_error_type = notification.get("error_type")
+        error_type = raw_error_type if isinstance(raw_error_type, str) else "UnknownError"
+        reason = allowed_errors.get(error_type, "알 수 없는 처리 오류")
+        return f"[{restaurant}] {date} 최종 처리 실패: {reason}"
+
+    menus = notification.get("menus")
+    safe_lines = [f"[{restaurant}] {date} 메뉴 처리 요약"]
+    if isinstance(menus, Mapping):
+        for raw_slot, items in sorted(menus.items(), key=lambda item: str(item[0])):
+            slot = raw_slot if isinstance(raw_slot, str) else ""
+            if not isinstance(slot, str) or not isinstance(items, list):
+                continue
+            safe_items = [item for item in items if isinstance(item, str)]
+            safe_lines.append(f"- {slot}: {', '.join(safe_items) if safe_items else '메뉴 없음'}")
+
+    empty_reasons = notification.get("empty_reasons")
+    if isinstance(empty_reasons, Mapping):
+        for raw_slot, raw_reason_code in sorted(
+            empty_reasons.items(), key=lambda item: str(item[0])
+        ):
+            slot = raw_slot if isinstance(raw_slot, str) else ""
+            reason_code = raw_reason_code if isinstance(raw_reason_code, str) else ""
+            if slot:
+                safe_lines.append(
+                    f"- {slot}: {_SAFE_EMPTY_REASONS.get(reason_code, '메뉴 처리 실패')}"
+                )
+    warnings = notification.get("warnings")
+    errors = notification.get("errors")
+    if isinstance(warnings, list) and warnings:
+        safe_lines.append(f"- 경고: {len(warnings)}건")
+    if isinstance(errors, list) and errors:
+        safe_lines.append(f"- 오류: {len(errors)}건")
+    return "\n".join(safe_lines)

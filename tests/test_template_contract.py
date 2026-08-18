@@ -9,15 +9,27 @@ README_PATH = ROOT / "README.md"
 DORMITORY_ASL_PATH = ROOT / "statemachine" / "dormitory-retry-workflow.asl.json"
 
 FUNCTION_HANDLERS = {
-    "DodamScrapingFunction": "functions.lambda_handlers.scraping.dodam.lambda_handler",
-    "HaksikScrapingFunction": "functions.lambda_handlers.scraping.haksik.lambda_handler",
-    "FacultyScrapingFunction": "functions.lambda_handlers.scraping.faculty.lambda_handler",
-    "DormitoryScrapingFunction": "functions.lambda_handlers.scraping.dormitory.lambda_handler",
-    "DodamSchedulingFunction": "functions.lambda_handlers.scheduling.dodam.lambda_handler",
-    "HaksikSchedulingFunction": "functions.lambda_handlers.scheduling.haksik.lambda_handler",
-    "FacultySchedulingFunction": "functions.lambda_handlers.scheduling.faculty.lambda_handler",
-    "DormitorySchedulingFunction": "functions.lambda_handlers.scheduling.dormitory.lambda_handler",
-    "NotifyFailureFunction": "functions.lambda_handlers.notify_failure.lambda_handler",
+    "DodamScrapingFunction": "functions.handler.lambda_handler",
+    "HaksikScrapingFunction": "functions.handler.lambda_handler",
+    "FacultyScrapingFunction": "functions.handler.lambda_handler",
+    "DormitoryScrapingFunction": "functions.handler.lambda_handler",
+    "DodamSchedulingFunction": "functions.handler.lambda_handler",
+    "HaksikSchedulingFunction": "functions.handler.lambda_handler",
+    "FacultySchedulingFunction": "functions.handler.lambda_handler",
+    "DormitorySchedulingFunction": "functions.handler.lambda_handler",
+    "NotifyFailureFunction": "functions.handler.lambda_handler",
+}
+
+FUNCTION_OPERATIONS = {
+    "DodamScrapingFunction": "scrape_dodam",
+    "HaksikScrapingFunction": "scrape_haksik",
+    "FacultyScrapingFunction": "scrape_faculty",
+    "DormitoryScrapingFunction": "scrape_dormitory",
+    "DodamSchedulingFunction": "schedule_dodam",
+    "HaksikSchedulingFunction": "schedule_haksik",
+    "FacultySchedulingFunction": "schedule_faculty",
+    "DormitorySchedulingFunction": "schedule_dormitory",
+    "NotifyFailureFunction": "notify_final_failure",
 }
 
 DIRECT_SCHEDULE_FUNCTIONS = {
@@ -100,6 +112,7 @@ def test_preserves_all_nine_functions_and_global_configuration():
     for function_id, handler in FUNCTION_HANDLERS.items():
         block = resources[function_id]
         assert f"Handler: {handler}" in block
+        assert f"OPERATION: {FUNCTION_OPERATIONS[function_id]}" in block
         assert "!Ref PythonRequirementsLayer" in block
 
 

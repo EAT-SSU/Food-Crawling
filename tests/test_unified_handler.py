@@ -293,10 +293,134 @@ def test_unmatched_main_menus_are_warned_once_without_reposting():
     ]
 
 
-def test_operation_loader_is_lazy_and_safe_with_current_config_package():
-    with patch("functions.config.settings.Settings.from_env") as from_env:
-        config = handler.load_operation_config("scrape_haksik")
-
+def test_operation_loader_uses_flat_config_module_and_operation_policy():
+    config = handler.load_operation_config("scrape_haksik")
     assert config is not None
     assert config["restaurant"] == "HAKSIK"
-    from_env.assert_not_called()
+    assert config["gpt_api_key"] == "test-gpt-key"
+
+
+def test_handler_has_no_dormant_duplicate_operation_or_restaurant_policy():
+    assert not hasattr(handler, "_RESTAURANTS")
+    assert not hasattr(handler, "_OPERATION_SPECS")
+
+
+def test_final_failure_configuration_requires_only_slack(monkeypatch):
+    monkeypatch.delenv("GPT_API_KEY")
+    monkeypatch.delenv("API_BASE_URL")
+    monkeypatch.delenv("DEV_API_BASE_URL")
+
+    config = handler.load_operation_config("notify_final_failure")
+
+    assert config is not None
+    assert set(config) == {
+        "operation",
+        "kind",
+        "restaurant",
+        "name_ko",
+        "week_days",
+        "slots",
+        "special_note",
+        "slack_webhook_url",
+    }
+
+
+def test_final_failure_slack_error_remains_explicit():
+    slack_error = RuntimeError("Slack unavailable")
+    with patch.object(handler, "notify_slack", AsyncMock(side_effect=slack_error)):
+        with pytest.raises(RuntimeError) as raised:
+            handler.lambda_handler(
+                {
+                    "operation": "notify_final_failure",
+                    "error_type": "RetryableEmptyMenuError",
+                    "target_date": "20260713",
+                },
+                _Context(),
+            )
+
+    assert raised.value is slack_error
+
+
+def test_empty_source_records_bypass_gpt_and_use_safe_summary():
+    scrape = AsyncMock(
+        return_value=[
+            {
+                "date": "20260713",
+                "restaurant": "DODAM",
+                "source_slot": "중식1",
+                "raw_text": "미운영",
+                "source_english": (),
+                "outcome": "EXPECTED_EMPTY",
+                "reason_code": "CLOSED_MARKER",
+            }
+        ]
+    )
+    interpret = AsyncMock()
+    publish = AsyncMock()
+    slack = AsyncMock()
+    with (
+        patch.object(handler, "scrape", scrape),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        response = handler.lambda_handler(
+            {"operation": "scrape_dodam", "target_date": "20260713"}, _Context()
+        )
+
+    assert response["statusCode"] == 200
+    interpret.assert_not_awaited()
+    publish.assert_not_awaited()
+    assert slack.await_args is not None
+    assert slack.await_args.args[1]["empty_reasons"] == {"중식1": "CLOSED_MARKER"}
+
+
+def test_dormitory_schedule_fetches_full_week_once():
+    dates = [f"202607{day:02d}" for day in range(13, 20)]
+    scrape = AsyncMock(return_value=[_raw(date, "DORMITORY") for date in dates])
+    with (
+        patch.object(handler, "_week_dates", return_value=dates),
+        patch.object(handler, "scrape", scrape),
+        patch.object(
+            handler,
+            "interpret_menu",
+            AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
+        ),
+        patch.object(handler, "publish_menu", AsyncMock(return_value=_accepted())),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        handler.lambda_handler({"operation": "schedule_dormitory"}, _Context())
+
+    scrape.assert_awaited_once_with(
+        handler.load_operation_config("schedule_dormitory"),
+        dates[0],
+        requested_dates=dates,
+    )
+
+
+def test_direct_dormitory_fetches_seven_dates_once_and_aggregates_weekly_response():
+    dates = [f"202607{day:02d}" for day in range(13, 20)]
+    scrape = AsyncMock(return_value=[_raw(date, "DORMITORY") for date in dates])
+    slack = AsyncMock()
+    with (
+        patch.object(handler, "scrape", scrape),
+        patch.object(
+            handler,
+            "interpret_menu",
+            AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
+        ),
+        patch.object(handler, "publish_menu", AsyncMock(return_value=_accepted())),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        response = handler.lambda_handler(
+            {"operation": "scrape_dormitory", "target_date": dates[0]}, _Context()
+        )
+
+    config = handler.load_operation_config("scrape_dormitory")
+    scrape.assert_awaited_once_with(config, dates[0], requested_dates=dates)
+    assert slack.await_count == 7
+    body = json.loads(response["body"])
+    assert body["success"] is True
+    assert body["date"] == "20260713_weekly"
+    assert body["message"] == "기숙사식당 주간 메뉴 처리 완료 (7일치)"
+    assert set(body["menus"]) == {f"{date}_중식1" for date in dates}
