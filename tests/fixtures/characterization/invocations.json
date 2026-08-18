@@ -1,0 +1,118 @@
+{
+  "operations": [
+    {
+      "operation": "scrape_dodam",
+      "logical_resource": "DodamScrapingFunction",
+      "kind": "scrape",
+      "restaurant": "DODAM",
+      "event": {"trigger": "iam", "target_date": "20260713", "queryStringParameters": null},
+      "expected_date": "20260713",
+      "expected_status": 200,
+      "destination_environments": ["dev"],
+      "expected_slack_count": 1
+    },
+    {
+      "operation": "scrape_haksik",
+      "logical_resource": "HaksikScrapingFunction",
+      "kind": "scrape",
+      "restaurant": "HAKSIK",
+      "event": {"queryStringParameters": {"date": "20260713"}},
+      "expected_date": "20260713",
+      "expected_status": 200,
+      "destination_environments": ["dev"],
+      "expected_slack_count": 1
+    },
+    {
+      "operation": "scrape_faculty",
+      "logical_resource": "FacultyScrapingFunction",
+      "kind": "scrape",
+      "restaurant": "FACULTY",
+      "event": {"trigger": "direct", "date": "20260713"},
+      "expected_date": "20260713",
+      "expected_status": 200,
+      "destination_environments": ["dev"],
+      "expected_slack_count": 1
+    },
+    {
+      "operation": "scrape_dormitory",
+      "logical_resource": "DormitoryScrapingFunction",
+      "kind": "scrape",
+      "restaurant": "DORMITORY",
+      "event": {"trigger": "local", "target_date": "20260713"},
+      "expected_date": "20260713",
+      "result_dates": ["20260713", "20260714"],
+      "expected_status": 200,
+      "destination_environments": ["dev"],
+      "expected_slack_count": 2
+    },
+    {
+      "operation": "schedule_dodam",
+      "logical_resource": "DodamSchedulingFunction",
+      "kind": "schedule",
+      "restaurant": "DODAM",
+      "event": {"trigger": "eventbridge", "delayed_schedule": false},
+      "manual_event": {"trigger": "direct", "delayed_schedule": true, "queryStringParameters": null},
+      "week_type": "INCLUDE_SATURDAY",
+      "expected_status": 200,
+      "destination_environments": ["dev", "prod"],
+      "expected_slack_count": 6,
+      "next_dates": ["20260720", "20260721", "20260722", "20260723", "20260724", "20260725"],
+      "current_dates": ["20260713", "20260714", "20260715", "20260716", "20260717", "20260718"]
+    },
+    {
+      "operation": "schedule_haksik",
+      "logical_resource": "HaksikSchedulingFunction",
+      "kind": "schedule",
+      "restaurant": "HAKSIK",
+      "event": {"trigger": "eventbridge", "delayed_schedule": false},
+      "manual_event": {"trigger": "direct", "delayed_schedule": true},
+      "week_type": "WEEKDAY",
+      "expected_status": 200,
+      "destination_environments": ["dev", "prod"],
+      "expected_slack_count": 5,
+      "next_dates": ["20260720", "20260721", "20260722", "20260723", "20260724"],
+      "current_dates": ["20260713", "20260714", "20260715", "20260716", "20260717"]
+    },
+    {
+      "operation": "schedule_faculty",
+      "logical_resource": "FacultySchedulingFunction",
+      "kind": "schedule",
+      "restaurant": "FACULTY",
+      "event": {"trigger": "eventbridge", "delayed_schedule": false},
+      "manual_event": {"queryStringParameters": {"delayed_schedule": "true"}},
+      "week_type": "WEEKDAY",
+      "expected_status": 200,
+      "destination_environments": ["dev", "prod"],
+      "expected_slack_count": 5,
+      "next_dates": ["20260720", "20260721", "20260722", "20260723", "20260724"],
+      "current_dates": ["20260713", "20260714", "20260715", "20260716", "20260717"]
+    },
+    {
+      "operation": "schedule_dormitory",
+      "logical_resource": "DormitorySchedulingFunction",
+      "kind": "schedule",
+      "restaurant": "DORMITORY",
+      "event": {"trigger": "step_functions", "execution_id": "execution-arn", "retry_count": 2, "delayed_schedule": false},
+      "expected_status": 200,
+      "destination_environments": ["dev", "prod"],
+      "expected_slack_count": 7,
+      "current_dates": ["20260713", "20260714", "20260715", "20260716", "20260717", "20260718", "20260719"]
+    }
+  ],
+  "final_failure": {
+    "operation": "notify_final_failure",
+    "logical_resource": "NotifyFailureFunction",
+    "event": {
+      "trigger": "step_functions",
+      "execution_id": "execution-arn",
+      "restaurant": "DORMITORY",
+      "error_type": "RetryableEmptyMenuError",
+      "target_date": "20260713"
+    },
+    "expected_slack_count": 1
+  },
+  "invalid": [
+    {"operation": "unknown_operation", "event": {"target_date": "20260713"}, "expected_error": "unknown operation"},
+    {"event": {"queryStringParameters": null, "target_date": "not-a-date"}, "expected_error": "missing operation"}
+  ]
+}

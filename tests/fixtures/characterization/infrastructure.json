@@ -1,0 +1,45 @@
+{
+  "authoritative_sha": "59d021dc5ad8a5d4a7449f4e807760dff4184d0e",
+  "functions": {
+    "DodamScrapingFunction": "functions.lambda_handlers.scraping.dodam.lambda_handler",
+    "HaksikScrapingFunction": "functions.lambda_handlers.scraping.haksik.lambda_handler",
+    "FacultyScrapingFunction": "functions.lambda_handlers.scraping.faculty.lambda_handler",
+    "DormitoryScrapingFunction": "functions.lambda_handlers.scraping.dormitory.lambda_handler",
+    "DodamSchedulingFunction": "functions.lambda_handlers.scheduling.dodam.lambda_handler",
+    "HaksikSchedulingFunction": "functions.lambda_handlers.scheduling.haksik.lambda_handler",
+    "FacultySchedulingFunction": "functions.lambda_handlers.scheduling.faculty.lambda_handler",
+    "DormitorySchedulingFunction": "functions.lambda_handlers.scheduling.dormitory.lambda_handler",
+    "NotifyFailureFunction": "functions.lambda_handlers.notify_failure.lambda_handler"
+  },
+  "function_contract": {
+    "count": 9,
+    "runtime": "python3.11",
+    "architecture": "arm64",
+    "timeout": 300,
+    "memory": 512,
+    "public_api_event_count": 0,
+    "function_url_count": 0,
+    "manual_invocation": "lambda:InvokeFunction",
+    "function_policy_count": 0
+  },
+  "general_schedule": {
+    "logical_resources": ["DodamSchedulingFunction", "HaksikSchedulingFunction", "FacultySchedulingFunction"],
+    "expression": "cron(0 7 ? * SUN *)",
+    "input": {"trigger": "eventbridge", "delayed_schedule": false},
+    "event_type": "Schedule"
+  },
+  "dormitory_schedule": {"expression": "cron(0 23 ? * SUN *)"},
+  "state_machine": {
+    "logical_resource": "DormitoryRetryStateMachine",
+    "definition": "statemachine/dormitory-retry-workflow.asl.json",
+    "substitutions": {
+      "DormitorySchedulingFunctionArn": "DormitorySchedulingFunction.Arn",
+      "NotifyFailureFunctionArn": "NotifyFailureFunction.Arn"
+    },
+    "policies": ["DormitorySchedulingFunction", "NotifyFailureFunction"],
+    "invoke_payload": {"trigger": "step_functions", "execution_id.$": "$$.Execution.Id", "retry_count.$": "$$.State.RetryCount", "delayed_schedule": false},
+    "failure_payload": {"trigger": "step_functions", "execution_id.$": "$$.Execution.Id", "restaurant": "DORMITORY", "error_type.$": "$.error.Error"},
+    "local_retry": {"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2.0},
+    "domain_retry": {"ErrorEquals": ["RetryableEmptyMenuError", "RetryableApiSendError"], "IntervalSeconds": 7200, "MaxAttempts": 5, "BackoffRate": 1.0}
+  }
+}
