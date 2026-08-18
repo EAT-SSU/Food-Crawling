@@ -1,0 +1,16 @@
+{
+  "valid_site_english": {
+    "id": "chatcmpl-site",
+    "tool_calls": [{"name": "extract_all_menus", "arguments": "{\"all_menus\":[\"제육볶음\",\"쌀밥\",\"미역국\"]}"}]
+  },
+  "valid_dormitory_candidates": {
+    "id": "chatcmpl-dormitory",
+    "tool_calls": [{"name": "extract_main_menus", "arguments": "{\"menuNames\":[\"김치찌개\",\"쌀밥\",\"계란말이\"],\"mainCandidates\":[{\"menuIndex\":0,\"nameEn\":\"Kimchi Stew\"},{\"menuIndex\":1,\"nameEn\":\"Rice\"},{\"menuIndex\":2,\"nameEn\":\"Rolled Omelette\"}]}"}]
+  },
+  "malformed": {
+    "missing_tool_calls": {"id": "chatcmpl-empty", "tool_calls": []},
+    "wrong_tool": {"id": "chatcmpl-wrong", "tool_calls": [{"name": "other", "arguments": "{}"}]},
+    "multiple_tool_calls": {"id": "chatcmpl-many", "tool_calls": [{"name": "extract_main_menus", "arguments": "{}"}, {"name": "extract_main_menus", "arguments": "{}"}]},
+    "invalid_json_arguments": {"id": "chatcmpl-json", "tool_calls": [{"name": "extract_main_menus", "arguments": "{"}]}
+  }
+}
