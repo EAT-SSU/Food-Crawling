@@ -43,6 +43,7 @@ def test_authoritative_snapshot_has_exactly_nine_lambda_resources_and_handlers()
     assert len(functions) == CONTRACT["function_contract"]["count"] == 9
     for logical_id, handler in CONTRACT["functions"].items():
         assert f"Handler: {handler}" in functions[logical_id]
+        assert f"OPERATION: {CONTRACT['operations'][logical_id]}" in functions[logical_id]
         assert "!Ref PythonRequirementsLayer" in functions[logical_id]
 
 

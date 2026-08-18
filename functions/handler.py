@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import hashlib
 import importlib
 import json
 import logging
 import os
 import re
+import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
 from types import MappingProxyType
@@ -14,6 +17,17 @@ from zoneinfo import ZoneInfo
 
 
 logger = logging.getLogger(__name__)
+
+_observation_context: contextvars.ContextVar[Mapping[str, Any]] = contextvars.ContextVar(
+    "observation_context", default={}
+)
+_observation_logger = logging.getLogger("food_crawling.observation")
+if not _observation_logger.handlers:
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setFormatter(logging.Formatter("%(message)s"))
+    _observation_logger.addHandler(_handler)
+_observation_logger.setLevel(logging.INFO)
+_observation_logger.propagate = False
 
 _DATE_PATTERN = re.compile(r"\d{8}")
 _TRIGGERS = frozenset({"direct", "eventbridge", "iam", "local", "step_functions"})
@@ -42,49 +56,6 @@ class RetryableApiSendError(Exception):
         self.target_date = target_date
         self.restaurant = restaurant
         self.failed_days = failed_days
-
-
-_RESTAURANTS = MappingProxyType(
-    {
-        "DODAM": {
-            "name_ko": "도담식당",
-            "week_days": 6,
-            "slots": {"중식": ("LUNCH", 6000), "석식": ("DINNER", 6000)},
-        },
-        "HAKSIK": {
-            "name_ko": "학생식당",
-            "week_days": 5,
-            "slots": {"중식": ("LUNCH", 5000), "석식": ("MORNING", 1000)},
-            "special_note": "석식 메뉴는 1000원 조식으로 처리됨",
-        },
-        "FACULTY": {
-            "name_ko": "교직원식당",
-            "week_days": 5,
-            "slots": {"중식": ("LUNCH", 7000)},
-            "special_note": "교직원식당은 점심만 운영됩니다",
-        },
-        "DORMITORY": {
-            "name_ko": "기숙사식당",
-            "week_days": 7,
-            "slots": {"중식": ("LUNCH", 5500), "석식": ("DINNER", 5500)},
-            "special_note": "기숙사식당은 조식을 운영하지 않습니다",
-        },
-    }
-)
-
-_OPERATION_SPECS = MappingProxyType(
-    {
-        "scrape_dodam": ("scrape", "DODAM"),
-        "scrape_haksik": ("scrape", "HAKSIK"),
-        "scrape_faculty": ("scrape", "FACULTY"),
-        "scrape_dormitory": ("scrape", "DORMITORY"),
-        "schedule_dodam": ("schedule", "DODAM"),
-        "schedule_haksik": ("schedule", "HAKSIK"),
-        "schedule_faculty": ("schedule", "FACULTY"),
-        "schedule_dormitory": ("schedule", "DORMITORY"),
-        "notify_final_failure": ("final_failure", "DORMITORY"),
-    }
-)
 
 
 def _mapping(value: object) -> Mapping[str, Any]:
@@ -139,32 +110,34 @@ def resolve_operation(event: object) -> str | None:
 
 
 def load_operation_config(operation: str) -> Mapping[str, Any] | None:
-    """Load Task 7 configuration lazily, with a dormant local policy fallback."""
+    """Load the authoritative flat Task 7 configuration lazily."""
     config_module = importlib.import_module("functions.config")
-    external_loader = getattr(config_module, "load_operation_config", None)
-    if callable(external_loader):
-        loaded = external_loader(operation)
-        return _mapping(loaded) or None
-
-    spec = _OPERATION_SPECS.get(operation)
-    if spec is None:
-        return None
-    kind, restaurant = spec
-    return {
-        "operation": operation,
-        "kind": kind,
-        "restaurant": restaurant,
-        **_RESTAURANTS[restaurant],
-    }
+    loaded = config_module.load_operation_config(operation)
+    return _mapping(loaded) or None
 
 
-async def scrape(config: Mapping[str, Any], target_date: str) -> Sequence[Mapping[str, Any]]:
-    """Lazy patch boundary for the Task 3 scraper module."""
+async def scrape(
+    config: Mapping[str, Any],
+    target_date: str,
+    requested_dates: Sequence[str] | None = None,
+) -> Sequence[Mapping[str, Any]]:
+    """Call the scraper's frozen record boundary and adapt its attributes."""
     module = importlib.import_module("functions.scraper")
-    result = await module.scrape(config["restaurant"], target_date)
-    if isinstance(result, Mapping):
-        return [result]
-    return result
+    records = await module.fetch_meals(
+        config["restaurant"], target_date, requested_dates=requested_dates
+    )
+    return [
+        {
+            "date": record.date,
+            "restaurant": record.restaurant,
+            "source_slot": record.source_slot,
+            "raw_text": record.raw_text,
+            "source_english": record.source_english,
+            "outcome": record.outcome,
+            "reason_code": record.reason_code,
+        }
+        for record in records
+    ]
 
 
 async def interpret_menu(
@@ -172,7 +145,12 @@ async def interpret_menu(
 ) -> Mapping[str, Any]:
     """Lazy patch boundary for the Task 4 menu AI module."""
     module = importlib.import_module("functions.menu_ai")
-    return await module.interpret_menu(raw_meal, config["restaurant"])
+    return await module.interpret_menu(
+        config["gpt_api_key"],
+        config["restaurant"],
+        raw_meal.get("raw_text", ""),
+        raw_meal.get("source_english", ()),
+    )
 
 
 async def publish_menu(
@@ -180,13 +158,45 @@ async def publish_menu(
 ) -> Any:
     """Lazy patch boundary for accepted Spring writes in Task 5."""
     module = importlib.import_module("functions.clients")
-    return await module.publish_menu(payload, environment=environment, config=config)
+    base_url_key = "api_base_url" if environment == "prod" else "dev_api_base_url"
+    return await module.publish_spring_meal(
+        base_url=config[base_url_key],
+        environment=environment,
+        date=payload["date"],
+        restaurant=payload["restaurant"],
+        time=payload["time"],
+        menu_names=payload["menuNames"],
+        price=payload["price"],
+        main_menus=payload.get("mainMenus"),
+    )
 
 
 async def notify_slack(config: Mapping[str, Any], notification: Mapping[str, Any]) -> Any:
     """Lazy patch boundary; final failure reaches only this client function."""
     module = importlib.import_module("functions.clients")
-    return await module.notify_slack(notification, config=config)
+    text = module.format_slack_text(notification)
+    return await module.send_slack_text(
+        webhook_url=config["slack_webhook_url"], text=text
+    )
+
+
+def fingerprint_source(text: str) -> tuple[int, str]:
+    encoded = text.encode("utf-8")
+    return len(encoded), hashlib.sha256(encoded).hexdigest()[:12]
+
+
+def emit_event(level: str, event_name: str, stage: str, **fields: Any) -> None:
+    event = {
+        **_observation_context.get(),
+        "event.name": event_name,
+        "stage": stage,
+        "log.level": level.upper(),
+        **{key: value for key, value in fields.items() if value is not None},
+    }
+    _observation_logger.log(
+        getattr(logging, level.upper(), logging.INFO),
+        json.dumps(event, ensure_ascii=False, separators=(",", ":"), default=str),
+    )
 
 
 def _week_dates(day_count: int, *, next_week: bool) -> list[str]:
@@ -250,14 +260,38 @@ async def _process_source_date(
     target_date: str,
     *,
     scheduled: bool,
+    requested_dates: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
-    raw_meals = list(await scrape(config, target_date))
     dormitory_retry = scheduled and config["restaurant"] == "DORMITORY"
+    try:
+        if requested_dates is None:
+            raw_meals = list(await scrape(config, target_date))
+        else:
+            raw_meals = list(
+                await scrape(config, target_date, requested_dates=requested_dates)
+            )
+    except Exception as error:
+        outcome = getattr(error, "outcome", None)
+        reason_code = getattr(error, "reason_code", "SOURCE_ERROR")
+        if dormitory_retry and outcome == "AMBIGUOUS_EMPTY":
+            raise RetryableEmptyMenuError(target_date) from None
+        if outcome not in {"EXPECTED_EMPTY", "AMBIGUOUS_EMPTY"}:
+            raise
+        raw_meals = [
+            {
+                "date": getattr(error, "date", target_date),
+                "source_slot": "전체",
+                "raw_text": "",
+                "source_english": (),
+                "outcome": outcome,
+                "reason_code": reason_code,
+            }
+        ]
     if dormitory_retry and not raw_meals:
         raise RetryableEmptyMenuError(target_date)
 
     summaries: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"menus": {}, "warnings": [], "errors": []}
+        lambda: {"menus": {}, "warnings": [], "errors": [], "empty_reasons": {}}
     )
     critical_failures: set[str] = set()
     environments = ("dev", "prod") if scheduled else ("dev",)
@@ -267,6 +301,32 @@ async def _process_source_date(
         meal_date = _meal_date(raw_meal, target_date)
         source_slot = _source_slot(raw_meal)
         summary = summaries[meal_date]
+        raw_text = raw_meal.get("raw_text", "")
+        if isinstance(raw_text, str):
+            source_length, source_sha256 = fingerprint_source(raw_text)
+            emit_event(
+                "INFO",
+                "source.classified",
+                "classify",
+                date=meal_date,
+                slot=source_slot,
+                outcome=raw_meal.get("outcome", "SUCCESS"),
+                reason_code=raw_meal.get("reason_code"),
+                source_length=source_length,
+                source_sha256=source_sha256,
+            )
+        outcome = raw_meal.get("outcome", "SUCCESS")
+        if outcome in {"EXPECTED_EMPTY", "AMBIGUOUS_EMPTY"}:
+            reason_code = raw_meal.get("reason_code", "SOURCE_EMPTY")
+            if dormitory_retry and outcome == "AMBIGUOUS_EMPTY":
+                raise RetryableEmptyMenuError(meal_date)
+            summary["menus"][source_slot] = []
+            summary["empty_reasons"][source_slot] = reason_code
+            if outcome == "AMBIGUOUS_EMPTY":
+                summary["errors"].append(
+                    {"slot": source_slot, "stage": "source", "error_type": str(reason_code)}
+                )
+            continue
         try:
             interpreted = await interpret_menu(config, raw_meal)
         except (RetryableEmptyMenuError, RetryableApiSendError):
@@ -343,7 +403,24 @@ async def _process_source_date(
             "restaurant": config["restaurant"],
             **summary,
         }
-        await notify_slack(config, notification)
+        try:
+            await notify_slack(config, notification)
+        except Exception as error:
+            error_type = type(error).__name__
+            summary["warnings"].append(
+                {
+                    "stage": "notification",
+                    "reason": "notification failed",
+                    "error_type": error_type,
+                }
+            )
+            emit_event(
+                "WARNING",
+                "notification.failed",
+                "notification",
+                date=meal_date,
+                error_type=error_type,
+            )
         results.append(
             {
                 "date": meal_date,
@@ -376,8 +453,21 @@ async def _run_scrape(
 ) -> dict[str, Any]:
     del event
     target_date = _dates_for(config, request)[0]
-    results = await _process_source_date(config, target_date, scheduled=False)
     if config["restaurant"] == "DORMITORY":
+        if isinstance(request.get("target_date"), str):
+            start_date = datetime.strptime(target_date, "%Y%m%d")
+            requested_dates = [
+                (start_date + timedelta(days=index)).strftime("%Y%m%d")
+                for index in range(7)
+            ]
+        else:
+            requested_dates = _week_dates(7, next_week=False)
+        results = await _process_source_date(
+            config,
+            target_date,
+            scheduled=False,
+            requested_dates=requested_dates,
+        )
         menus = {
             f"{result['date']}_{slot}": items
             for result in results
@@ -398,6 +488,7 @@ async def _run_scrape(
             "special_note": config.get("special_note"),
         }
     else:
+        results = await _process_source_date(config, target_date, scheduled=False)
         result = results[0]
         body = {
             "success": result["success"],
@@ -418,7 +509,11 @@ async def _run_schedule(
     dates = _dates_for(config, request)
     results: list[dict[str, Any]] = []
     if config["restaurant"] == "DORMITORY":
-        results.extend(await _process_source_date(config, dates[0], scheduled=True))
+        results.extend(
+            await _process_source_date(
+                config, dates[0], scheduled=True, requested_dates=dates
+            )
+        )
     else:
         for target_date in dates:
             results.extend(await _process_source_date(config, target_date, scheduled=True))
@@ -479,7 +574,6 @@ DISPATCH_TABLE: Mapping[
 
 async def orchestrate(event: object, context: object) -> dict[str, Any]:
     """Resolve and execute exactly one operation inside one event-loop boundary."""
-    del context
     operation = resolve_operation(event)
     if operation is None:
         return _invalid_response("missing operation")
@@ -490,7 +584,42 @@ async def orchestrate(event: object, context: object) -> dict[str, Any]:
     if config is None or config.get("operation", operation) != operation:
         return _invalid_response("operation configuration mismatch")
     request = parse_event(event)
-    return await dispatcher(config, request, event)
+    payload = _mapping(event)
+    invocation_id = getattr(context, "aws_request_id", "unknown")
+    run_id = request.get("execution_id") or payload.get("id") or invocation_id
+    token = _observation_context.set(
+        {
+            "service.name": "menu-scraper",
+            "faas.invocation_id": str(invocation_id),
+            "run_id": str(run_id),
+            "operation": operation,
+            "restaurant": config["restaurant"],
+            "trigger": request["trigger"],
+        }
+    )
+    try:
+        emit_event("INFO", "handler.invocation.started", "handler")
+        response = await dispatcher(config, request, event)
+        emit_event("INFO", "handler.invocation.completed", "handler")
+        return response
+    except (RetryableEmptyMenuError, RetryableApiSendError) as error:
+        emit_event(
+            "WARNING",
+            "handler.invocation.retryable",
+            "handler",
+            error_type=type(error).__name__,
+        )
+        raise
+    except Exception as error:
+        emit_event(
+            "ERROR",
+            "handler.invocation.failed",
+            "handler",
+            error_type=type(error).__name__,
+        )
+        raise
+    finally:
+        _observation_context.reset(token)
 
 
 def lambda_handler(event: object, context: object) -> dict[str, Any]:
