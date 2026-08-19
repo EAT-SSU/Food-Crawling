@@ -104,3 +104,80 @@ def test_empty_slot_and_all_failure_stages_use_concise_allowlisted_labels():
         "⚠️ 중식5: 대표메뉴 매칭 실패"
     )
     assert SENTINEL not in text
+
+
+def test_dormitory_representatives_render_after_their_full_korean_slot_menu():
+    text = format_slack_text(
+        {
+            "type": "date_summary",
+            "date": "20260812",
+            "restaurant": "기숙사식당",
+            "menus": {
+                "석식1": ["닭갈비", "쌀밥", "배추김치", "요구르트"],
+                "중식1": ["돈까스", "우동", "단무지", "샐러드"],
+            },
+            "main_menus": {
+                "석식1": [
+                    {"nameKo": "닭갈비", "nameEn": "Spicy Stir-fried Chicken"},
+                    {"nameKo": "쌀밥", "nameEn": "Rice"},
+                ],
+                "중식1": [
+                    {"nameKo": "돈까스", "nameEn": "Pork Cutlet"},
+                    {"nameKo": "우동", "nameEn": "Udon"},
+                ],
+            },
+            "warnings": [],
+            "errors": [],
+        }
+    )
+
+    assert text == (
+        "🍽️ 기숙사식당 (20260812)\n"
+        "• 석식1: 닭갈비, 쌀밥, 배추김치, 요구르트\n"
+        "  ↳ 대표: 닭갈비 (Spicy Stir-fried Chicken), 쌀밥 (Rice)\n"
+        "• 중식1: 돈까스, 우동, 단무지, 샐러드\n"
+        "  ↳ 대표: 돈까스 (Pork Cutlet), 우동 (Udon)"
+    )
+
+
+def test_representative_menu_rejects_unsafe_or_noncanonical_entries():
+    text = format_slack_text(
+        {
+            "type": "date_summary",
+            "date": "20260812",
+            "restaurant": "도담식당",
+            "menus": {"중식1": ["제육볶음", "쌀밥"]},
+            "main_menus": {
+                "중식1": [
+                    {"nameKo": "제육볶음", "nameEn": SENTINEL},
+                    {
+                        "nameKo": "쌀밥",
+                        "nameEn": "Rice",
+                        "provider.Cause": SENTINEL,
+                    },
+                    {"nameKo": "쌀밥", "nameEn": "Rice"},
+                ]
+            },
+            "provider.mainMenus": [
+                {"nameKo": "공급자메뉴", "nameEn": SENTINEL}
+            ],
+            "warnings": [],
+            "errors": [],
+        }
+    )
+
+    assert text == (
+        "🍽️ 도담식당 (20260812)\n"
+        "• 중식1: 제육볶음, 쌀밥\n"
+        "  ↳ 대표: 쌀밥 (Rice)"
+    )
+    for unsafe in (
+        "<html>",
+        "SECRET_TOKEN",
+        "https://",
+        "provider.invalid",
+        "Cause",
+        "Critical",
+        "공급자메뉴",
+    ):
+        assert unsafe not in text
