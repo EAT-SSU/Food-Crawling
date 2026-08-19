@@ -33,6 +33,8 @@ _UNSAFE_DISPLAY_PATTERN = re.compile(
     r"<|>|://|www\.|critical|cause|secret|exception|traceback|provider\.",
     re.IGNORECASE,
 )
+
+
 def _safe_display(value: object) -> str | None:
     if not isinstance(value, str):
         return None
@@ -223,6 +225,7 @@ def format_slack_text(notification: Mapping[str, object]) -> str:
         return f"{header}\n⚠️ 최종 처리 실패: {reason}"
 
     menus = notification.get("menus")
+    main_menus = notification.get("main_menus")
     empty_reasons = notification.get("empty_reasons")
     if (
         isinstance(empty_reasons, Mapping)
@@ -268,6 +271,29 @@ def format_slack_text(notification: Mapping[str, object]) -> str:
             ]
             if safe_items:
                 safe_lines.append(f"• {slot}: {', '.join(safe_items)}")
+                raw_representatives = (
+                    main_menus.get(raw_slot) if isinstance(main_menus, Mapping) else None
+                )
+                safe_representatives: list[str] = []
+                if isinstance(raw_representatives, list):
+                    for representative in raw_representatives:
+                        if (
+                            not isinstance(representative, Mapping)
+                            or set(representative) != {"nameKo", "nameEn"}
+                        ):
+                            continue
+                        raw_name_ko = representative["nameKo"]
+                        raw_name_en = representative["nameEn"]
+                        if not isinstance(raw_name_ko, str) or not isinstance(
+                            raw_name_en, str
+                        ):
+                            continue
+                        name_ko = _safe_display(raw_name_ko)
+                        name_en = _safe_display(raw_name_en)
+                        if name_ko in safe_items and name_en is not None:
+                            safe_representatives.append(f"{name_ko} ({name_en})")
+                if safe_representatives:
+                    safe_lines.append(f"  ↳ 대표: {', '.join(safe_representatives)}")
 
     if isinstance(empty_reasons, Mapping):
         for raw_slot, raw_reason_code in sorted(

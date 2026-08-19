@@ -108,7 +108,11 @@ def test_unified_handler_integrates_real_wave2_modules_at_external_boundaries():
         "mainMenus": [{"nameKo": "제육볶음", "nameEn": "Spicy Pork"}],
     }
     slack_text = slack_session.post.call_args.kwargs["json"]["text"]
-    assert slack_text == "🍽️ 도담식당 (20260713)\n• 중식1: 제육볶음"
+    assert slack_text == (
+        "🍽️ 도담식당 (20260713)\n"
+        "• 중식1: 제육볶음\n"
+        "  ↳ 대표: 제육볶음 (Spicy Pork)"
+    )
 
 
 def test_accepted_spring_is_not_replayed_when_slack_retries_exhaust(monkeypatch):

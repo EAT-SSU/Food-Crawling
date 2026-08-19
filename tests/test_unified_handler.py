@@ -300,6 +300,67 @@ def test_unmatched_main_menus_are_warned_once_without_reposting():
     ]
 
 
+def test_date_summary_maps_only_interpreted_main_menus_by_source_slot():
+    scrape = AsyncMock(
+        return_value=[
+            {
+                **_raw("20260713", "DODAM"),
+                "source_slot": "중식1",
+                "raw_text": "제육볶음 Spicy Pork 쌀밥",
+            },
+            {
+                **_raw("20260713", "DODAM"),
+                "source_slot": "석식1",
+                "raw_text": "된장찌개 Soybean Paste Stew",
+            },
+        ]
+    )
+    interpret = AsyncMock(
+        side_effect=[
+            {
+                "menuNames": ["제육볶음", "쌀밥"],
+                "mainMenus": [{"nameKo": "제육볶음", "nameEn": "Spicy Pork"}],
+            },
+            {"menuNames": ["된장찌개"], "mainMenus": []},
+        ]
+    )
+    publish = AsyncMock(
+        side_effect=[
+            _accepted(
+                unmatched=[
+                    {"nameKo": "공급자메뉴", "nameEn": "Provider Secret"}
+                ]
+            ),
+            _accepted(),
+        ]
+    )
+    slack = AsyncMock(return_value=True)
+
+    with (
+        patch.object(handler, "scrape", scrape),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        response = handler.lambda_handler(
+            {"operation": "scrape_dodam", "target_date": "20260713"},
+            _Context(),
+        )
+
+    assert response["statusCode"] == 200
+    slack.assert_awaited_once()
+    assert slack.await_args is not None
+    notification = slack.await_args.args[1]
+    assert notification["menus"] == {
+        "중식1": ["제육볶음", "쌀밥"],
+        "석식1": ["된장찌개"],
+    }
+    assert notification["main_menus"] == {
+        "중식1": [{"nameKo": "제육볶음", "nameEn": "Spicy Pork"}]
+    }
+    assert "공급자메뉴" not in str(notification["main_menus"])
+
+
 def test_operation_loader_uses_flat_config_module_and_operation_policy():
     config = handler.load_operation_config("scrape_haksik")
     assert config is not None
