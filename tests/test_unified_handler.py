@@ -214,6 +214,8 @@ def test_final_failure_loads_one_operation_and_calls_only_slack(monkeypatch):
     interpret.assert_not_awaited()
     publish.assert_not_awaited()
     slack.assert_awaited_once()
+    assert slack.await_args is not None
+    assert slack.await_args.args[1]["restaurant"] == "기숙사식당"
 
 
 @pytest.mark.parametrize(
@@ -289,7 +291,12 @@ def test_unmatched_main_menus_are_warned_once_without_reposting():
     assert slack.await_args is not None
     notification = slack.await_args.args[1]
     assert notification["warnings"] == [
-        {"slot": "중식1", "reason": "unmatched main menus", "items": unmatched}
+        {
+            "slot": "중식1",
+            "stage": "unmatched",
+            "reason": "unmatched main menus",
+            "items": unmatched,
+        }
     ]
 
 
@@ -433,6 +440,7 @@ def test_complete_dormitory_week_including_closed_date_keeps_current_behavior():
     assert interpret.await_count == 6
     assert publish.await_count == 12
     assert slack.await_count == 7
+    assert {call.args[1]["restaurant"] for call in slack.await_args_list} == {"기숙사식당"}
 
 
 def test_direct_dormitory_fetches_seven_dates_once_and_aggregates_weekly_response():
@@ -456,6 +464,7 @@ def test_direct_dormitory_fetches_seven_dates_once_and_aggregates_weekly_respons
     config = handler.load_operation_config("scrape_dormitory")
     scrape.assert_awaited_once_with(config, dates[0], requested_dates=dates)
     assert slack.await_count == 7
+    assert {call.args[1]["restaurant"] for call in slack.await_args_list} == {"기숙사식당"}
     body = json.loads(response["body"])
     assert body["success"] is True
     assert body["date"] == "20260713_weekly"

@@ -374,6 +374,7 @@ async def _process_source_date(
                 summary["warnings"].append(
                     {
                         "slot": source_slot,
+                        "stage": "publication",
                         "environment": environment,
                         "reason": "publication failed",
                         "error_type": type(error).__name__,
@@ -389,11 +390,21 @@ async def _process_source_date(
             warnings = _result_value(publication, "warnings", [])
             if unmatched:
                 summary["warnings"].append(
-                    {"slot": source_slot, "reason": "unmatched main menus", "items": unmatched}
+                    {
+                        "slot": source_slot,
+                        "stage": "unmatched",
+                        "reason": "unmatched main menus",
+                        "items": unmatched,
+                    }
                 )
             if warnings:
                 summary["warnings"].append(
-                    {"slot": source_slot, "reason": "accepted response warning", "items": warnings}
+                    {
+                        "slot": source_slot,
+                        "stage": "publication",
+                        "reason": "accepted response warning",
+                        "items": warnings,
+                    }
                 )
 
     if dormitory_retry and critical_failures:
@@ -406,7 +417,7 @@ async def _process_source_date(
         notification = {
             "type": "date_summary",
             "date": meal_date,
-            "restaurant": config["restaurant"],
+            "restaurant": config["name_ko"],
             **summary,
         }
         try:
@@ -546,7 +557,7 @@ async def _run_final_failure(
         {
             "type": "final_failure",
             "date": target_date,
-            "restaurant": config["restaurant"],
+            "restaurant": config["name_ko"],
             "error_type": error_type,
             "retry_count": request["retry_count"],
         },
