@@ -49,7 +49,10 @@ MENU_TOOL: ChatCompletionToolParam = {
 }
 
 SYSTEM_PROMPT = """You interpret Korean university cafeteria menu text.
-Return every Korean food name in menuNames, preserving its extracted text exactly.
+Return only Korean menu dish names in menuNames, preserving each dish name exactly.
+Exclude meal-slot labels such as 중식1, 석식1, and 조식1; all English translations or
+English service labels such as Serve Kitchen; service/corner labels such as [대면코너];
+decorative symbols such as ★; and duplicate entries. Never include non-food text.
 Select representative main menus through mainCandidates.menuIndex; never repeat an index.
 For HAKSIK, DODAM, and FACULTY, copy each nameEn verbatim from the supplied source.
 For DORMITORY, provide English translations for exactly three representative menus, or all
@@ -57,6 +60,8 @@ menus when fewer than three exist. Always call extract_main_menus exactly once."
 
 _HANGUL_RE = re.compile(r"[\u3131-\u318e\uac00-\ud7a3]")
 _LATIN_RE = re.compile(r"[A-Za-z]")
+_SLOT_LABEL_RE = re.compile(r"^(?:조식|중식|석식)\s*\d*$")
+_BRACKETED_LABEL_RE = re.compile(r"^\s*\[[^\]]+\]\s*$")
 
 
 class MenuInterpretationError(ValueError):
@@ -119,6 +124,15 @@ def validate_tool_arguments(
     ):
         raise MenuInterpretationError("menuNames must be a non-empty list of strings")
     menu_names = cast(list[str], raw_menu_names)
+    if len(menu_names) != len(set(menu_names)):
+        raise MenuInterpretationError("menuNames must not contain duplicates")
+    for menu_name in menu_names:
+        if not _HANGUL_RE.search(menu_name):
+            raise MenuInterpretationError("each menuNames item must contain Hangul")
+        if _SLOT_LABEL_RE.fullmatch(menu_name.strip()):
+            raise MenuInterpretationError("menuNames must not contain meal-slot labels")
+        if _BRACKETED_LABEL_RE.fullmatch(menu_name):
+            raise MenuInterpretationError("menuNames must not contain bracketed labels")
 
     raw_candidates = arguments["mainCandidates"]
     if not isinstance(raw_candidates, list):
@@ -229,6 +243,7 @@ async def _request_completion(
         ],
         tools=[MENU_TOOL],
         tool_choice={"type": "function", "function": {"name": TOOL_NAME}},
+        reasoning_effort=cast(Any, "none"),
     )
 
 

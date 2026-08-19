@@ -47,6 +47,7 @@ def test_tool_schema_is_strict_and_index_based():
     parameters = function_schema["parameters"]
     assert parameters["additionalProperties"] is False
     assert parameters["required"] == ["menuNames", "mainCandidates"]
+    assert "uniqueItems" not in parameters["properties"]["menuNames"]
     candidate = parameters["properties"]["mainCandidates"]["items"]
     assert candidate["additionalProperties"] is False
     assert candidate["required"] == ["menuIndex", "nameEn"]
@@ -69,21 +70,64 @@ def test_dormitory_assembles_name_ko_directly_from_menu_index():
     assert result["mainMenus"][1]["nameKo"] is result["menuNames"][1]
 
 
-def test_duplicate_menu_text_is_preserved_when_indexes_are_unique():
+def test_duplicate_live_dodam_menu_text_is_rejected():
     arguments = {
-        "menuNames": ["쌀밥", "쌀밥"],
+        "menuNames": ["생고기제육볶음", "생고기제육볶음"],
         "mainCandidates": [
-            {"menuIndex": 0, "nameEn": "Steamed Rice"},
-            {"menuIndex": 1, "nameEn": "Rice"},
+            {"menuIndex": 0, "nameEn": "Stir-fried Pork"},
+            {"menuIndex": 1, "nameEn": "Stir-fried Pork"},
+        ],
+    }
+
+    with pytest.raises(menu_ai.MenuInterpretationError, match="duplicates"):
+        menu_ai.validate_tool_arguments(
+            arguments,
+            "DODAM",
+            "생고기제육볶음 Stir-fried Pork",
+            ["Stir-fried Pork"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("contamination", "error"),
+    [
+        ("중식1", "meal-slot"),
+        ("석식1", "meal-slot"),
+        ("조식1", "meal-slot"),
+        ("Serve Kitchen", "Hangul"),
+        ("[대면코너]", "bracketed"),
+        ("★", "Hangul"),
+    ],
+)
+def test_live_dodam_non_food_menu_names_are_rejected(contamination, error):
+    arguments = {
+        "menuNames": [contamination],
+        "mainCandidates": [{"menuIndex": 0, "nameEn": "Spicy Pork"}],
+    }
+
+    with pytest.raises(menu_ai.MenuInterpretationError, match=error):
+        menu_ai.validate_tool_arguments(
+            arguments, "DODAM", f"{contamination} Spicy Pork"
+        )
+
+
+def test_korean_dish_names_may_contain_digits_parentheses_ampersands_and_spaces():
+    menu_names = ["제육볶음 2인분", "돈까스(매운맛)", "김치 & 참치 볶음밥"]
+    arguments = {
+        "menuNames": menu_names,
+        "mainCandidates": [
+            {"menuIndex": 0, "nameEn": "Pork for Two"},
+            {"menuIndex": 1, "nameEn": "Spicy Pork Cutlet"},
+            {"menuIndex": 2, "nameEn": "Kimchi and Tuna Fried Rice"},
         ],
     }
 
     result = menu_ai.validate_tool_arguments(
-        arguments, "DORMITORY", "쌀밥 쌀밥"
+        arguments, "DORMITORY", " ".join(menu_names)
     )
 
-    assert result["menuNames"] == ["쌀밥", "쌀밥"]
-    assert [item["nameKo"] for item in result["mainMenus"]] == ["쌀밥", "쌀밥"]
+    assert result["menuNames"] == menu_names
+    assert [item["nameKo"] for item in result["mainMenus"]] == menu_names
 
 
 @pytest.mark.parametrize("restaurant", ["HAKSIK", "DODAM", "FACULTY"])
@@ -281,6 +325,7 @@ async def test_interpret_menu_uses_exact_model_tool_and_choice():
         "type": "function",
         "function": {"name": menu_ai.TOOL_NAME},
     }
+    assert kwargs["reasoning_effort"] == "none"
     assert result["mainMenus"][1] == {"nameKo": "쌀밥", "nameEn": "Rice"}
 
 
