@@ -250,9 +250,27 @@ def _menu_names(interpreted: Mapping[str, Any]) -> list[str]:
     return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
-def _main_menus(interpreted: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    value = interpreted.get("mainMenus", interpreted.get("main_menus", []))
-    return [item for item in value if isinstance(item, Mapping)] if isinstance(value, list) else []
+def _main_menus(
+    interpreted: Mapping[str, Any], menu_names: Sequence[str]
+) -> list[dict[str, str]]:
+    value = interpreted.get("mainMenus")
+    if not isinstance(value, list):
+        return []
+
+    validated: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {"nameKo", "nameEn"}:
+            continue
+        name_ko = item["nameKo"]
+        name_en = item["nameEn"]
+        if (
+            isinstance(name_ko, str)
+            and name_ko in menu_names
+            and isinstance(name_en, str)
+            and name_en.strip()
+        ):
+            validated.append({"nameKo": name_ko, "nameEn": name_en})
+    return validated
 
 
 async def _process_source_date(
@@ -297,7 +315,13 @@ async def _process_source_date(
             raise RetryableEmptyMenuError(target_date)
 
     summaries: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"menus": {}, "warnings": [], "errors": [], "empty_reasons": {}}
+        lambda: {
+            "menus": {},
+            "main_menus": {},
+            "warnings": [],
+            "errors": [],
+            "empty_reasons": {},
+        }
     )
     critical_failures: set[str] = set()
     environments = ("dev", "prod") if scheduled else ("dev",)
@@ -346,6 +370,9 @@ async def _process_source_date(
 
         menu_names = _menu_names(interpreted)
         summary["menus"][source_slot] = menu_names
+        main_menus = _main_menus(interpreted, menu_names)
+        if main_menus:
+            summary["main_menus"][source_slot] = main_menus
         policy = _slot_policy(config, source_slot)
         if policy is None:
             summary["warnings"].append(
@@ -360,7 +387,6 @@ async def _process_source_date(
             "price": price,
             "menuNames": menu_names,
         }
-        main_menus = _main_menus(interpreted)
         if main_menus:
             payload["mainMenus"] = main_menus
 
