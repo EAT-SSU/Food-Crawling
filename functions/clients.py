@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence, Tuple
 
@@ -19,6 +20,29 @@ _SAFE_EMPTY_REASONS = {
     "MISSING_SLOT_COLUMN": "메뉴 원본 구조 변경",
     "EMPTY_CELL": "메뉴 미게시 또는 원본 누락",
 }
+
+_SAFE_STAGE_REASONS = {
+    "menu_ai": "메뉴 파싱 실패",
+    "parsing": "메뉴 파싱 실패",
+    "source": "메뉴 원본 확인 필요",
+    "publication": "메뉴 저장 실패",
+    "unmatched": "대표메뉴 매칭 실패",
+}
+
+_UNSAFE_DISPLAY_PATTERN = re.compile(
+    r"<|>|://|www\.|critical|cause|secret|exception|traceback|provider\.",
+    re.IGNORECASE,
+)
+def _safe_display(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = " ".join(value.split())
+    if (
+        not normalized
+        or _UNSAFE_DISPLAY_PATTERN.search(normalized)
+    ):
+        return None
+    return normalized
 
 
 class SpringPublishError(RuntimeError):
@@ -176,12 +200,14 @@ async def send_slack_text(*, webhook_url: str, text: str) -> None:
 def format_slack_text(notification: Mapping[str, object]) -> str:
     """Render only allowlisted orchestration fields for Slack."""
     notification_type = notification.get("type")
-    date = notification.get("date") if isinstance(notification.get("date"), str) else "unknown"
-    restaurant = (
-        notification.get("restaurant")
-        if isinstance(notification.get("restaurant"), str)
-        else "UNKNOWN"
+    raw_date = notification.get("date")
+    date = (
+        raw_date
+        if isinstance(raw_date, str) and re.fullmatch(r"\d{8}", raw_date)
+        else "unknown"
     )
+    restaurant = _safe_display(notification.get("restaurant")) or "식당"
+    header = f"🍽️ {restaurant} ({date})"
     if notification_type == "final_failure":
         allowed_errors = {
             "RetryableEmptyMenuError": "메뉴 미게시",
@@ -194,33 +220,64 @@ def format_slack_text(notification: Mapping[str, object]) -> str:
         raw_error_type = notification.get("error_type")
         error_type = raw_error_type if isinstance(raw_error_type, str) else "UnknownError"
         reason = allowed_errors.get(error_type, "알 수 없는 처리 오류")
-        return f"[{restaurant}] {date} 최종 처리 실패: {reason}"
+        return f"{header}\n⚠️ 최종 처리 실패: {reason}"
 
     menus = notification.get("menus")
-    safe_lines = [f"[{restaurant}] {date} 메뉴 처리 요약"]
+    empty_reasons = notification.get("empty_reasons")
+    if (
+        isinstance(empty_reasons, Mapping)
+        and empty_reasons.get("전체") == "HOLIDAY"
+    ):
+        return f"{header}\nℹ️ 휴무일"
+
+    statuses: list[str] = []
+    status_keys: set[tuple[str | None, str]] = set()
+    error_slots: set[str] = set()
+    for field in ("errors", "warnings"):
+        entries = notification.get(field)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            raw_stage = entry.get("stage")
+            stage = raw_stage if isinstance(raw_stage, str) else ""
+            reason = _SAFE_STAGE_REASONS.get(stage)
+            if reason is None:
+                continue
+            slot = _safe_display(entry.get("slot"))
+            key = (slot, reason)
+            if key in status_keys:
+                continue
+            status_keys.add(key)
+            if slot:
+                error_slots.add(slot)
+            statuses.append(f"⚠️ {slot}: {reason}" if slot else f"⚠️ {reason}")
+
+    safe_lines = [header]
+    empty_slots = set(empty_reasons) if isinstance(empty_reasons, Mapping) else set()
     if isinstance(menus, Mapping):
         for raw_slot, items in sorted(menus.items(), key=lambda item: str(item[0])):
-            slot = raw_slot if isinstance(raw_slot, str) else ""
-            if not isinstance(slot, str) or not isinstance(items, list):
+            slot = _safe_display(raw_slot)
+            if not slot or not isinstance(items, list) or slot in empty_slots:
                 continue
-            safe_items = [item for item in items if isinstance(item, str)]
-            safe_lines.append(f"- {slot}: {', '.join(safe_items) if safe_items else '메뉴 없음'}")
+            safe_items = [
+                safe_item
+                for item in items
+                if (safe_item := _safe_display(item)) is not None
+            ]
+            if safe_items:
+                safe_lines.append(f"• {slot}: {', '.join(safe_items)}")
 
-    empty_reasons = notification.get("empty_reasons")
     if isinstance(empty_reasons, Mapping):
         for raw_slot, raw_reason_code in sorted(
             empty_reasons.items(), key=lambda item: str(item[0])
         ):
-            slot = raw_slot if isinstance(raw_slot, str) else ""
+            slot = _safe_display(raw_slot)
             reason_code = raw_reason_code if isinstance(raw_reason_code, str) else ""
-            if slot:
+            if slot and slot not in error_slots:
                 safe_lines.append(
-                    f"- {slot}: {_SAFE_EMPTY_REASONS.get(reason_code, '메뉴 처리 실패')}"
+                    f"ℹ️ {slot}: {_SAFE_EMPTY_REASONS.get(reason_code, '메뉴 원본 확인 필요')}"
                 )
-    warnings = notification.get("warnings")
-    errors = notification.get("errors")
-    if isinstance(warnings, list) and warnings:
-        safe_lines.append(f"- 경고: {len(warnings)}건")
-    if isinstance(errors, list) and errors:
-        safe_lines.append(f"- 오류: {len(errors)}건")
+    safe_lines.extend(statuses)
     return "\n".join(safe_lines)
