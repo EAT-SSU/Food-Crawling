@@ -41,6 +41,7 @@ Resources:
         - arm64
     Metadata:
       BuildMethod: python3.11
+      BuildArchitecture: arm64
 
   # === Scraping Functions ===
   # 하루짜리 스크래핑 함수들 (백업용)
@@ -48,7 +49,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ./
-      Handler: functions.lambda_handlers.scraping.dodam.lambda_handler
+      Handler: functions.handler.lambda_handler
+      Environment:
+        Variables:
+          OPERATION: scrape_dodam
       Layers:
         - !Ref PythonRequirementsLayer
 
@@ -56,7 +60,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ./
-      Handler: functions.lambda_handlers.scraping.haksik.lambda_handler
+      Handler: functions.handler.lambda_handler
+      Environment:
+        Variables:
+          OPERATION: scrape_haksik
       Layers:
         - !Ref PythonRequirementsLayer
 
@@ -64,7 +71,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ./
-      Handler: functions.lambda_handlers.scraping.faculty.lambda_handler
+      Handler: functions.handler.lambda_handler
+      Environment:
+        Variables:
+          OPERATION: scrape_faculty
       Layers:
         - !Ref PythonRequirementsLayer
 
@@ -72,7 +82,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ./
-      Handler: functions.lambda_handlers.scraping.dormitory.lambda_handler
+      Handler: functions.handler.lambda_handler
+      Environment:
+        Variables:
+          OPERATION: scrape_dormitory
       Layers:
         - !Ref PythonRequirementsLayer
 
@@ -82,7 +95,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ./
-      Handler: functions.lambda_handlers.scheduling.dodam.lambda_handler
+      Handler: functions.handler.lambda_handler
+      Environment:
+        Variables:
+          OPERATION: schedule_dodam
       Layers:
         - !Ref PythonRequirementsLayer
       Events:
@@ -101,7 +117,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ./
-      Handler: functions.lambda_handlers.scheduling.haksik.lambda_handler
+      Handler: functions.handler.lambda_handler
+      Environment:
+        Variables:
+          OPERATION: schedule_haksik
       Layers:
         - !Ref PythonRequirementsLayer
       Events:
@@ -120,7 +139,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ./
-      Handler: functions.lambda_handlers.scheduling.faculty.lambda_handler
+      Handler: functions.handler.lambda_handler
+      Environment:
+        Variables:
+          OPERATION: schedule_faculty
       Layers:
         - !Ref PythonRequirementsLayer
       Events:
@@ -139,7 +161,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ./
-      Handler: functions.lambda_handlers.scheduling.dormitory.lambda_handler
+      Handler: functions.handler.lambda_handler
+      Environment:
+        Variables:
+          OPERATION: schedule_dormitory
       Layers:
         - !Ref PythonRequirementsLayer
 
@@ -147,7 +172,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ./
-      Handler: functions.lambda_handlers.notify_failure.lambda_handler
+      Handler: functions.handler.lambda_handler
+      Environment:
+        Variables:
+          OPERATION: notify_final_failure
       Layers:
         - !Ref PythonRequirementsLayer
 

@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/meals/with-price",
+    "query": {"date": "20260713", "restaurant": "DODAM", "time": "LUNCH"},
+    "body": {"price": 6000, "menuNames": ["제육볶음", "쌀밥", "미역국"]},
+    "timeout_seconds": 10
+  },
+  "routing": {
+    "direct_scrape": {"targets": ["dev"], "critical": "dev"},
+    "scheduled": {"targets": ["dev", "prod"], "critical": "prod"}
+  },
+  "responses": {
+    "accepted_empty": {"status": 204, "body": null},
+    "accepted_matched": {"status": 200, "body": {"unmatchedMainMenus": []}},
+    "accepted_unmatched": {"status": 200, "body": {"unmatchedMainMenus": [{"nameKo": "없는메뉴", "nameEn": "Missing"}]}},
+    "accepted_malformed": {"status": 200, "body": "not-json"},
+    "rejected": {"status": 500, "body": {"message": "server error"}}
+  }
+}

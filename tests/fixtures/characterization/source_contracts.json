@@ -1,0 +1,69 @@
+{
+  "DODAM": {
+    "date": "20260713",
+    "source": {"kind": "soongguri", "restaurant_code": 2},
+    "menu_texts": {
+      "중식1": "중식1 제육볶음 Spicy Pork 쌀밥 미역국",
+      "석식1": "석식1 돈가스 Pork Cutlet 샐러드"
+    },
+    "slot_outcomes": {"중식1": "SUCCESS", "석식1": "SUCCESS"},
+    "publication": {
+      "중식1": {"time": "LUNCH", "price": 6000},
+      "석식1": {"time": "DINNER", "price": 6000},
+      "조식1": null
+    }
+  },
+  "HAKSIK": {
+    "date": "20260713",
+    "source": {"kind": "soongguri", "restaurant_code": 1},
+    "menu_texts": {
+      "중식1": "중식1 비빔밥 Bibimbap 된장국",
+      "석식1": "석식1 천원의 아침밥 One Dollar Breakfast 계란후라이"
+    },
+    "slot_outcomes": {"중식1": "SUCCESS", "석식1": "SUCCESS"},
+    "publication": {
+      "중식1": {"time": "LUNCH", "price": 5000},
+      "석식1": {"time": "MORNING", "price": 1000}
+    }
+  },
+  "FACULTY": {
+    "date": "20260713",
+    "source": {"kind": "soongguri", "restaurant_code": 7},
+    "menu_texts": {
+      "중식1": "중식1 뚝배기불고기 Beef Bulgogi 잡곡밥 포기김치"
+    },
+    "slot_outcomes": {"중식1": "SUCCESS"},
+    "publication": {
+      "중식1": {"time": "LUNCH", "price": 7000},
+      "석식1": null
+    }
+  },
+  "DORMITORY": {
+    "date": "20260713",
+    "source": {"kind": "dormitory", "restaurant_code": null},
+    "dates": ["20260713", "20260714"],
+    "menu_texts": [
+      {"중식": "김치찌개 쌀밥 계란말이", "석식": "카레라이스 단무지"},
+      {"중식": "비빔밥 된장국"}
+    ],
+    "slot_outcomes": [
+      {"중식": "SUCCESS", "석식": "SUCCESS"},
+      {"중식": "SUCCESS", "석식": "EXPECTED_EMPTY"}
+    ],
+    "publication": {
+      "중식": {"time": "LUNCH", "price": 5500},
+      "석식": {"time": "DINNER", "price": 5500},
+      "조식": null
+    }
+  },
+  "destinations": {
+    "direct_scrape": ["dev"],
+    "scheduled": ["dev", "prod"],
+    "critical": {"direct_scrape": "dev", "scheduled": "prod"}
+  },
+  "retry_attempts": {
+    "gpt": {"attempts": 3, "wait_seconds": 5},
+    "spring": {"attempts": 3, "wait_seconds": 2},
+    "slack": {"attempts": 3, "wait_seconds": 2}
+  }
+}
