@@ -445,7 +445,9 @@ def test_empty_source_records_bypass_gpt_and_use_safe_summary():
 
 def test_partial_dormitory_week_retries_before_ai_spring_or_slack():
     dates = [f"202607{day:02d}" for day in range(13, 20)]
-    scrape = AsyncMock(return_value=[_raw(date, "DORMITORY") for date in dates[:-1]])
+    scrape = AsyncMock(
+        return_value=[_raw(date, "DORMITORY") for date in dates if date != dates[2]]
+    )
     interpret = AsyncMock()
     publish = AsyncMock()
     slack = AsyncMock()
@@ -502,6 +504,48 @@ def test_complete_dormitory_week_including_closed_date_keeps_current_behavior():
     assert publish.await_count == 12
     assert slack.await_count == 7
     assert {call.args[1]["restaurant"] for call in slack.await_args_list} == {"기숙사식당"}
+
+
+def test_dormitory_closed_weekend_is_complete_without_ai_or_spring_calls():
+    dates = [f"202608{day:02d}" for day in range(24, 31)]
+    closed_records = [
+        {
+            "date": date,
+            "restaurant": "DORMITORY",
+            "source_slot": "전체",
+            "raw_text": "",
+            "source_english": (),
+            "outcome": "EXPECTED_EMPTY",
+            "reason_code": "WEEKEND_CLOSED",
+        }
+        for date in dates[-2:]
+    ]
+    scrape = AsyncMock(
+        return_value=[_raw(date, "DORMITORY") for date in dates[:5]] + closed_records
+    )
+    interpret = AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []})
+    publish = AsyncMock(return_value=_accepted())
+    slack = AsyncMock()
+
+    with (
+        patch.object(handler, "_week_dates", return_value=dates),
+        patch.object(handler, "scrape", scrape),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        response = handler.lambda_handler({"operation": "schedule_dormitory"}, _Context())
+
+    assert response["statusCode"] == 200
+    assert interpret.await_count == 5
+    assert publish.await_count == 10
+    assert slack.await_count == 7
+    weekend_notifications = [call.args[1] for call in slack.await_args_list[-2:]]
+    assert all(item["menus"] == {"전체": []} for item in weekend_notifications)
+    assert all(
+        item["empty_reasons"] == {"전체": "WEEKEND_CLOSED"}
+        for item in weekend_notifications
+    )
 
 
 def test_direct_dormitory_fetches_seven_dates_once_and_aggregates_weekly_response():

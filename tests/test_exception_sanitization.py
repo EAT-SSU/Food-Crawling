@@ -73,6 +73,24 @@ def test_whole_day_holiday_has_exactly_one_status_without_empty_menu_line():
     assert "메뉴 없음" not in text
 
 
+def test_whole_day_weekend_closure_has_concise_safe_text():
+    text = format_slack_text(
+        {
+            "type": "date_summary",
+            "date": "20260829",
+            "restaurant": "기숙사식당",
+            "menus": {"전체": []},
+            "empty_reasons": {"전체": "WEEKEND_CLOSED"},
+            "raw_text": "9월5일 토요일 부터~ 주말 정상운영 합니다.",
+            "errors": [],
+            "warnings": [],
+        }
+    )
+
+    assert text == "🍽️ 기숙사식당 (20260829)\nℹ️ 주말 미운영"
+    assert "9월5일" not in text
+
+
 def test_empty_slot_and_all_failure_stages_use_concise_allowlisted_labels():
     text = format_slack_text(
         {

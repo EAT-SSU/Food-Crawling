@@ -107,6 +107,66 @@ def test_dormitory_selects_requested_rows_after_the_seventh_row():
     ]
 
 
+def test_dormitory_summer_break_notice_closes_only_weekends_before_reopening():
+    html = (FIXTURES / "dormitory_summer_break_week.html").read_text(encoding="utf-8")
+    dates = [f"202608{day:02d}" for day in range(24, 31)]
+
+    records = parse_dormitory_html(html, dates)
+
+    closed = [record for record in records if record.date in {"20260829", "20260830"}]
+    assert [record.date for record in closed] == ["20260829", "20260830"]
+    assert all(record.source_slot == "전체" for record in closed)
+    assert all(record.outcome == EXPECTED_EMPTY for record in closed)
+    assert all(record.reason_code == "WEEKEND_CLOSED" for record in closed)
+    assert all(record.raw_text == "" and record.source_english == () for record in closed)
+    assert {record.date for record in records} == set(dates)
+    assert all("주말 정상운영" not in record.raw_text for record in records)
+    assert all(record.raw_text != "." for record in records)
+
+
+def test_dormitory_reopening_date_and_later_weekends_use_normal_cells():
+    html = (FIXTURES / "dormitory_summer_break_week.html").read_text(encoding="utf-8")
+
+    records = parse_dormitory_html(html, ["20260905", "20260906"])
+
+    assert [(record.source_slot, record.raw_text, record.outcome) for record in records] == [
+        ("중식", "토요일 특식 쌀밥", SUCCESS),
+        ("석식", "토요일 저녁 국", SUCCESS),
+        ("중식", "일요일 특식 쌀밥", SUCCESS),
+        ("석식", "일요일 저녁 국", SUCCESS),
+    ]
+
+
+@pytest.mark.parametrize(
+    "page_notice",
+    [
+        "하계방학기간 주말에는 식당 운영을 하지 않습니다.",
+        "9월5일 토요일 부터~ 주말 정상운영 합니다.",
+    ],
+)
+def test_dormitory_weekend_policy_requires_closure_and_reopening_notices(page_notice):
+    html = page_notice + _dormitory_html(
+        ["날짜", "중식", "석식"], [["08-29 토", "비빔밥", "된장국"]]
+    )
+
+    records = parse_dormitory_html(html, ["20260829"])
+
+    assert all(record.outcome == SUCCESS for record in records)
+
+
+def test_dormitory_notice_and_punctuation_cells_are_not_menu_records():
+    html = _dormitory_html(
+        ["날짜", "중식", "석식"],
+        [["08-29 토", "9월5일 토요일 부터~ 주말 정상운영 합니다.", "."]],
+    )
+
+    records = parse_dormitory_html(html, ["20260829"])
+
+    assert all(record.outcome == AMBIGUOUS_EMPTY for record in records)
+    assert all(record.reason_code == "EMPTY_CELL" for record in records)
+    assert all(record.raw_text == "" for record in records)
+
+
 def test_soongguri_holiday_and_slot_empty_outcomes_are_explicit():
     with pytest.raises(HolidayError) as raised:
         parse_soongguri_html("<main>오늘은 쉽니다.</main>", "20260713", "DODAM")

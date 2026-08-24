@@ -37,6 +37,12 @@ _CLOSURE_MARKERS = frozenset(
 _ENGLISH_PHRASE = re.compile(
     r"(?<![A-Za-z])(?:[A-Za-z][A-Za-z'’-]*)(?:[ \t]+[A-Za-z][A-Za-z'’-]*)*"
 )
+_DORMITORY_WEEKEND_CLOSURE = re.compile(
+    r"주말에는\s*식당\s*운영을\s*하지\s*않습니다"
+)
+_DORMITORY_WEEKEND_REOPENING = re.compile(
+    r"(?P<month>\d{1,2})\s*월\s*(?P<day>\d{1,2})\s*일.{0,40}?주말\s*정상\s*운영"
+)
 
 
 @dataclass(frozen=True)
@@ -288,6 +294,35 @@ def _source_date(raw_date: str, requested: Mapping[str, str]) -> str | None:
     return None
 
 
+def _dormitory_weekend_reopening(
+    soup: BeautifulSoup, ordered_dates: Sequence[str]
+) -> datetime | None:
+    page_text = _normalized_text(soup.get_text(" ", strip=True))
+    if _DORMITORY_WEEKEND_CLOSURE.search(page_text) is None:
+        return None
+    reopening_match = _DORMITORY_WEEKEND_REOPENING.search(page_text)
+    if reopening_match is None:
+        return None
+    year = datetime.strptime(ordered_dates[0], "%Y%m%d").year
+    try:
+        return datetime(
+            year,
+            int(reopening_match.group("month")),
+            int(reopening_match.group("day")),
+        )
+    except ValueError:
+        return None
+
+
+def _is_dormitory_non_menu(value: str) -> bool:
+    normalized = _normalized_text(value)
+    return (
+        _DORMITORY_WEEKEND_CLOSURE.search(normalized) is not None
+        or _DORMITORY_WEEKEND_REOPENING.search(normalized) is not None
+        or re.search(r"\w", normalized) is None
+    )
+
+
 def parse_dormitory_html(
     html_content: str,
     requested_dates: Iterable[str],
@@ -295,6 +330,14 @@ def parse_dormitory_html(
     ordered_dates, requested = _requested_date_map(requested_dates)
     error_date = ordered_dates[0]
     soup = BeautifulSoup(html_content, "html.parser")
+    reopening = _dormitory_weekend_reopening(soup, ordered_dates)
+    closed_weekends = {
+        requested_date
+        for requested_date in ordered_dates
+        if reopening is not None
+        and (parsed_date := datetime.strptime(requested_date, "%Y%m%d")).weekday() >= 5
+        and parsed_date < reopening
+    }
     table = soup.find("table", class_="boxstyle02")
     if not isinstance(table, Tag):
         raise SourceParseError(error_date, "DORMITORY", "SOURCE_SCHEMA_CHANGED")
@@ -314,13 +357,27 @@ def parse_dormitory_html(
         slot: headers.index(slot) for slot in ("중식", "석식") if slot in headers
     }
 
-    records_by_date: dict[str, list[MealRecord]] = {}
+    records_by_date: dict[str, list[MealRecord]] = {
+        date: [
+            MealRecord(
+                date,
+                "DORMITORY",
+                "전체",
+                "",
+                outcome=EXPECTED_EMPTY,
+                reason_code="WEEKEND_CLOSED",
+            )
+        ]
+        for date in closed_weekends
+    }
     for row in matrix[1:]:
         raw_date = row[date_index] if date_index < len(row) else None
         if raw_date is None:
             raise SourceParseError(error_date, "DORMITORY", "MISSING_DATE_CELL")
         date = _source_date(raw_date, requested)
         if date is None:
+            continue
+        if date in closed_weekends:
             continue
 
         day_records: list[MealRecord] = []
@@ -341,7 +398,7 @@ def parse_dormitory_html(
                 continue
 
             items = [item.strip() for item in value.split("\r\n") if item.strip()]
-            if not items:
+            if not items or _is_dormitory_non_menu(value):
                 day_records.append(
                     MealRecord(
                         date,
