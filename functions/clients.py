@@ -12,6 +12,7 @@ _RESPONSE_PARSE_WARNING = "Spring accepted the meal but returned malformed JSON"
 
 _SAFE_EMPTY_REASONS = {
     "HOLIDAY": "휴무일",
+    "WEEKEND_CLOSED": "주말 미운영",
     "CLOSED_MARKER": "미운영",
     "SOURCE_EMPTY": "메뉴 미게시 또는 원본 누락",
     "SOURCE_SCHEMA_CHANGED": "메뉴 원본 구조 변경",
@@ -232,6 +233,11 @@ def format_slack_text(notification: Mapping[str, object]) -> str:
         and empty_reasons.get("전체") == "HOLIDAY"
     ):
         return f"{header}\nℹ️ 휴무일"
+    if (
+        isinstance(empty_reasons, Mapping)
+        and empty_reasons.get("전체") == "WEEKEND_CLOSED"
+    ):
+        return f"{header}\nℹ️ 주말 미운영"
 
     statuses: list[str] = []
     status_keys: set[tuple[str | None, str]] = set()
