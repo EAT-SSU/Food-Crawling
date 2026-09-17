@@ -19,6 +19,19 @@ def test_final_failure_slack_uses_only_allowlisted_error_text():
     assert "provider.invalid" not in text
 
 
+def test_retryable_menu_interpretation_failure_has_safe_slack_mapping():
+    text = format_slack_text(
+        {
+            "type": "final_failure",
+            "date": "20260918",
+            "restaurant": "학생식당",
+            "error_type": "RetryableMenuInterpretationError",
+        }
+    )
+
+    assert text == "🍽️ 학생식당 (20260918)\n⚠️ 최종 처리 실패: 메뉴 파싱 실패"
+
+
 def test_production_like_partial_failure_uses_only_allowlisted_slot_reason():
     text = format_slack_text(
         {
