@@ -31,6 +31,7 @@ _observation_logger.propagate = False
 
 _DATE_PATTERN = re.compile(r"\d{8}")
 _TRIGGERS = frozenset({"direct", "eventbridge", "iam", "local", "step_functions"})
+_SCHEDULE_MODES = frozenset({"next_week", "current_week", "tomorrow"})
 _CONTENT_HEADERS = {"Content-Type": "application/json; charset=utf-8"}
 
 
@@ -58,6 +59,21 @@ class RetryableApiSendError(Exception):
         self.failed_days = failed_days
 
 
+class RetryableMenuInterpretationError(Exception):
+    """Signal Step Functions that model output validation should be retried."""
+
+    def __init__(
+        self,
+        target_date: str,
+        restaurant: str = "DORMITORY",
+        reason_code: str = "VALIDATION_FAILED",
+    ) -> None:
+        super().__init__("retryable menu interpretation failure")
+        self.target_date = target_date
+        self.restaurant = restaurant
+        self.reason_code = reason_code
+
+
 def _mapping(value: object) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -70,6 +86,16 @@ def _boolean(value: object) -> bool:
 
 def _date(value: object) -> str | None:
     return value if isinstance(value, str) and _DATE_PATTERN.fullmatch(value) else None
+
+
+def _schedule_anchor(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return value if parsed.tzinfo is not None else None
 
 
 def _retry_count(value: object) -> int:
@@ -87,6 +113,17 @@ def parse_event(event: object) -> dict[str, Any]:
     raw_trigger = payload.get("trigger")
     delayed = payload.get("delayed_schedule", query.get("delayed_schedule"))
     execution_id = payload.get("execution_id")
+    raw_schedule_mode = payload.get("schedule_mode", query.get("schedule_mode"))
+    schedule_mode = (
+        raw_schedule_mode
+        if isinstance(raw_schedule_mode, str) and raw_schedule_mode in _SCHEDULE_MODES
+        else None
+    )
+    if schedule_mode is None and _boolean(delayed):
+        schedule_mode = "current_week"
+    raw_notify_summary = payload.get(
+        "notify_summary", query.get("notify_summary", True)
+    )
     return {
         "trigger": raw_trigger if raw_trigger in _TRIGGERS else "direct",
         "delayed_schedule": _boolean(delayed),
@@ -97,6 +134,11 @@ def parse_event(event: object) -> dict[str, Any]:
         "target_date": _date(
             payload.get("target_date") or payload.get("date") or query.get("date")
         ),
+        "schedule_mode": schedule_mode,
+        "notify_summary": (
+            raw_notify_summary if isinstance(raw_notify_summary, bool) else True
+        ),
+        "schedule_anchor": _schedule_anchor(payload.get("schedule_anchor")),
     }
 
 
@@ -113,6 +155,13 @@ def load_operation_config(operation: str) -> Mapping[str, Any] | None:
     """Load the authoritative flat Task 7 configuration lazily."""
     config_module = importlib.import_module("functions.config")
     loaded = config_module.load_operation_config(operation)
+    return _mapping(loaded) or None
+
+
+def load_restaurant_config(restaurant: object) -> Mapping[str, Any] | None:
+    """Resolve allowlisted restaurant metadata without loading runtime secrets."""
+    config_module = importlib.import_module("functions.config")
+    loaded = config_module.load_restaurant_config(restaurant)
     return _mapping(loaded) or None
 
 
@@ -199,11 +248,26 @@ def emit_event(level: str, event_name: str, stage: str, **fields: Any) -> None:
     )
 
 
-def _week_dates(day_count: int, *, next_week: bool) -> list[str]:
-    now = datetime.now(ZoneInfo("Asia/Seoul")).replace(
+def _now_seoul() -> datetime:
+    return datetime.now(ZoneInfo("Asia/Seoul"))
+
+
+def _request_now(request: Mapping[str, Any]) -> datetime:
+    anchor = request.get("schedule_anchor")
+    if isinstance(anchor, str):
+        return datetime.fromisoformat(anchor.replace("Z", "+00:00")).astimezone(
+            ZoneInfo("Asia/Seoul")
+        )
+    return _now_seoul()
+
+
+def _week_dates(
+    day_count: int, *, next_week: bool, now: datetime | None = None
+) -> list[str]:
+    current = (now or _now_seoul()).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
-    monday = now - timedelta(days=now.weekday())
+    monday = current - timedelta(days=current.weekday())
     if next_week:
         monday += timedelta(days=7)
     return [(monday + timedelta(days=index)).strftime("%Y%m%d") for index in range(day_count)]
@@ -213,6 +277,16 @@ def _dates_for(config: Mapping[str, Any], request: Mapping[str, Any]) -> list[st
     target_date = request.get("target_date")
     if isinstance(target_date, str):
         return [target_date]
+    schedule_mode = request.get("schedule_mode")
+    now = _request_now(request)
+    if schedule_mode == "tomorrow":
+        return [(now + timedelta(days=1)).strftime("%Y%m%d")]
+    if schedule_mode in {"current_week", "next_week"}:
+        return _week_dates(
+            int(config["week_days"]),
+            next_week=schedule_mode == "next_week",
+            now=now,
+        )
     if config["kind"] == "scrape":
         return _week_dates(7, next_week=False)[:1]
     if config["restaurant"] == "DORMITORY" or request["delayed_schedule"]:
@@ -279,8 +353,9 @@ async def _process_source_date(
     *,
     scheduled: bool,
     requested_dates: Sequence[str] | None = None,
+    notify_summary: bool = True,
 ) -> list[dict[str, Any]]:
-    dormitory_retry = scheduled and config["restaurant"] == "DORMITORY"
+    workflow_retry = scheduled
     try:
         if requested_dates is None:
             raw_meals = list(await scrape(config, target_date))
@@ -291,8 +366,8 @@ async def _process_source_date(
     except Exception as error:
         outcome = getattr(error, "outcome", None)
         reason_code = getattr(error, "reason_code", "SOURCE_ERROR")
-        if dormitory_retry and outcome == "AMBIGUOUS_EMPTY":
-            raise RetryableEmptyMenuError(target_date) from None
+        if workflow_retry and outcome == "AMBIGUOUS_EMPTY":
+            raise RetryableEmptyMenuError(target_date, config["restaurant"]) from None
         if outcome not in {"EXPECTED_EMPTY", "AMBIGUOUS_EMPTY"}:
             raise
         raw_meals = [
@@ -305,14 +380,14 @@ async def _process_source_date(
                 "reason_code": reason_code,
             }
         ]
-    if dormitory_retry and requested_dates is not None:
+    if workflow_retry and requested_dates is not None:
         represented_dates = {
             meal_date
             for raw_meal in raw_meals
             if (meal_date := _date(raw_meal.get("date"))) is not None
         }
         if set(requested_dates) - represented_dates:
-            raise RetryableEmptyMenuError(target_date)
+            raise RetryableEmptyMenuError(target_date, config["restaurant"])
 
     summaries: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
@@ -348,8 +423,8 @@ async def _process_source_date(
         outcome = raw_meal.get("outcome", "SUCCESS")
         if outcome in {"EXPECTED_EMPTY", "AMBIGUOUS_EMPTY"}:
             reason_code = raw_meal.get("reason_code", "SOURCE_EMPTY")
-            if dormitory_retry and outcome == "AMBIGUOUS_EMPTY":
-                raise RetryableEmptyMenuError(meal_date)
+            if workflow_retry and outcome == "AMBIGUOUS_EMPTY":
+                raise RetryableEmptyMenuError(meal_date, config["restaurant"])
             summary["menus"][source_slot] = []
             summary["empty_reasons"][source_slot] = reason_code
             if outcome == "AMBIGUOUS_EMPTY":
@@ -359,10 +434,48 @@ async def _process_source_date(
             continue
         try:
             interpreted = await interpret_menu(config, raw_meal)
-        except (RetryableEmptyMenuError, RetryableApiSendError):
+        except (
+            RetryableEmptyMenuError,
+            RetryableApiSendError,
+            RetryableMenuInterpretationError,
+        ):
             raise
         except Exception as error:
-            logger.warning("menu interpretation failed: %s", type(error).__name__)
+            menu_ai_module = importlib.import_module("functions.menu_ai")
+            is_validation_error = isinstance(
+                error, menu_ai_module.MenuInterpretationError
+            )
+            if is_validation_error:
+                reason_code = getattr(error, "reason_code", "VALIDATION_FAILED")
+                if reason_code not in menu_ai_module.MENU_INTERPRETATION_REASON_CODES:
+                    reason_code = "VALIDATION_FAILED"
+                emit_event(
+                    "WARNING",
+                    "menu_ai.validation_failed",
+                    "menu_ai",
+                    date=meal_date,
+                    slot=source_slot,
+                    error_type="MenuInterpretationError",
+                    reason_code=reason_code,
+                )
+                if workflow_retry:
+                    raise RetryableMenuInterpretationError(
+                        meal_date, config["restaurant"], reason_code
+                    ) from None
+            else:
+                emit_event(
+                    "WARNING",
+                    "menu_ai.request_failed",
+                    "menu_ai",
+                    date=meal_date,
+                    slot=source_slot,
+                    error_type="MenuProviderError",
+                    reason_code="PROVIDER_FAILURE",
+                )
+                if workflow_retry:
+                    raise RetryableMenuInterpretationError(
+                        meal_date, config["restaurant"], "PROVIDER_FAILURE"
+                    ) from None
             summary["errors"].append(
                 {"slot": source_slot, "stage": "menu_ai", "error_type": type(error).__name__}
             )
@@ -393,7 +506,11 @@ async def _process_source_date(
         for environment in environments:
             try:
                 publication = await publish_menu(config, payload, environment)
-            except (RetryableEmptyMenuError, RetryableApiSendError):
+            except (
+                RetryableEmptyMenuError,
+                RetryableApiSendError,
+                RetryableMenuInterpretationError,
+            ):
                 raise
             except Exception as error:
                 logger.warning("Spring publication failed: %s", type(error).__name__)
@@ -433,8 +550,12 @@ async def _process_source_date(
                     }
                 )
 
-    if dormitory_retry and critical_failures:
-        raise RetryableApiSendError(target_date, failed_days=len(critical_failures))
+    if workflow_retry and critical_failures:
+        raise RetryableApiSendError(
+            target_date,
+            config["restaurant"],
+            failed_days=len(critical_failures),
+        )
 
     if not summaries:
         summaries[target_date]
@@ -446,24 +567,25 @@ async def _process_source_date(
             "restaurant": config["name_ko"],
             **summary,
         }
-        try:
-            await notify_slack(config, notification)
-        except Exception as error:
-            error_type = type(error).__name__
-            summary["warnings"].append(
-                {
-                    "stage": "notification",
-                    "reason": "notification failed",
-                    "error_type": error_type,
-                }
-            )
-            emit_event(
-                "WARNING",
-                "notification.failed",
-                "notification",
-                date=meal_date,
-                error_type=error_type,
-            )
+        if notify_summary:
+            try:
+                await notify_slack(config, notification)
+            except Exception as error:
+                error_type = type(error).__name__
+                summary["warnings"].append(
+                    {
+                        "stage": "notification",
+                        "reason": "notification failed",
+                        "error_type": error_type,
+                    }
+                )
+                emit_event(
+                    "WARNING",
+                    "notification.failed",
+                    "notification",
+                    date=meal_date,
+                    error_type=error_type,
+                )
         results.append(
             {
                 "date": meal_date,
@@ -554,12 +676,23 @@ async def _run_schedule(
     if config["restaurant"] == "DORMITORY":
         results.extend(
             await _process_source_date(
-                config, dates[0], scheduled=True, requested_dates=dates
+                config,
+                dates[0],
+                scheduled=True,
+                requested_dates=dates,
+                notify_summary=request["notify_summary"],
             )
         )
     else:
         for target_date in dates:
-            results.extend(await _process_source_date(config, target_date, scheduled=True))
+            results.extend(
+                await _process_source_date(
+                    config,
+                    target_date,
+                    scheduled=True,
+                    notify_summary=request["notify_summary"],
+                )
+            )
     return _response(200, results)
 
 
@@ -571,19 +704,22 @@ async def _run_final_failure(
     known_errors = {
         "RetryableEmptyMenuError",
         "RetryableApiSendError",
+        "RetryableMenuInterpretationError",
         "Lambda.ServiceException",
         "Lambda.AWSLambdaException",
         "Lambda.SdkClientException",
         "Lambda.TooManyRequestsException",
     }
     error_type = raw_error_type if raw_error_type in known_errors else "UnknownError"
-    target_date = request.get("target_date") or _week_dates(7, next_week=False)[0]
+    restaurant_metadata = load_restaurant_config(payload.get("restaurant")) or config
+    notification_config = {**config, **restaurant_metadata}
+    target_date = _dates_for(notification_config, request)[0]
     await notify_slack(
-        config,
+        notification_config,
         {
             "type": "final_failure",
             "date": target_date,
-            "restaurant": config["name_ko"],
+            "restaurant": notification_config["name_ko"],
             "error_type": error_type,
             "retry_count": request["retry_count"],
         },
@@ -628,6 +764,11 @@ async def orchestrate(event: object, context: object) -> dict[str, Any]:
         return _invalid_response("operation configuration mismatch")
     request = parse_event(event)
     payload = _mapping(event)
+    context_config = (
+        load_restaurant_config(payload.get("restaurant")) or config
+        if operation == "notify_final_failure"
+        else config
+    )
     invocation_id = getattr(context, "aws_request_id", "unknown")
     run_id = request.get("execution_id") or payload.get("id") or invocation_id
     token = _observation_context.set(
@@ -636,7 +777,7 @@ async def orchestrate(event: object, context: object) -> dict[str, Any]:
             "faas.invocation_id": str(invocation_id),
             "run_id": str(run_id),
             "operation": operation,
-            "restaurant": config["restaurant"],
+            "restaurant": context_config["restaurant"],
             "trigger": request["trigger"],
         }
     )
@@ -645,7 +786,11 @@ async def orchestrate(event: object, context: object) -> dict[str, Any]:
         response = await dispatcher(config, request, event)
         emit_event("INFO", "handler.invocation.completed", "handler")
         return response
-    except (RetryableEmptyMenuError, RetryableApiSendError) as error:
+    except (
+        RetryableEmptyMenuError,
+        RetryableApiSendError,
+        RetryableMenuInterpretationError,
+    ) as error:
         emit_event(
             "WARNING",
             "handler.invocation.retryable",
