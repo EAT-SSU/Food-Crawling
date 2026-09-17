@@ -52,4 +52,7 @@ def test_null_query_map_and_malformed_date_have_safe_defaults():
         "execution_id": None,
         "retry_count": 0,
         "target_date": None,
+        "schedule_mode": None,
+        "notify_summary": True,
+        "schedule_anchor": None,
     }

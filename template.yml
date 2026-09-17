@@ -101,17 +101,6 @@ Resources:
           OPERATION: schedule_dodam
       Layers:
         - !Ref PythonRequirementsLayer
-      Events:
-        # 매주 일요일 오후 4시에 자동 실행 (KST 기준으로는 일요일 07시 UTC)
-        WeeklySchedule:
-          Type: Schedule
-          Properties:
-            Schedule: cron(0 7 ? * SUN *)
-            Input: |
-              {
-                "trigger": "eventbridge",
-                "delayed_schedule": false
-              }
 
   HaksikSchedulingFunction:
     Type: AWS::Serverless::Function
@@ -123,17 +112,6 @@ Resources:
           OPERATION: schedule_haksik
       Layers:
         - !Ref PythonRequirementsLayer
-      Events:
-        # 매주 일요일 오후 4시에 자동 실행
-        WeeklySchedule:
-          Type: Schedule
-          Properties:
-            Schedule: cron(0 7 ? * SUN *)
-            Input: |
-              {
-                "trigger": "eventbridge",
-                "delayed_schedule": false
-              }
 
   FacultySchedulingFunction:
     Type: AWS::Serverless::Function
@@ -145,17 +123,6 @@ Resources:
           OPERATION: schedule_faculty
       Layers:
         - !Ref PythonRequirementsLayer
-      Events:
-        # 매주 일요일 오후 4시에 자동 실행
-        WeeklySchedule:
-          Type: Schedule
-          Properties:
-            Schedule: cron(0 7 ? * SUN *)
-            Input: |
-              {
-                "trigger": "eventbridge",
-                "delayed_schedule": false
-              }
 
   DormitorySchedulingFunction:
     Type: AWS::Serverless::Function
@@ -297,13 +264,89 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/${NotifyFailureFunction}"
       RetentionInDays: 30
 
+  DodamRetryStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/menu-retry-workflow.asl.json
+      DefinitionSubstitutions:
+        SchedulingFunctionArn: !GetAtt DodamSchedulingFunction.Arn
+        NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn
+        Restaurant: DODAM
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref DodamSchedulingFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref NotifyFailureFunction
+      Events:
+        WeeklySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 7 ? * SUN *)
+            Input: '{"schedule_mode":"next_week","notify_summary":true}'
+        RecoverySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(5 7 ? * MON-THU *)
+            Input: '{"schedule_mode":"tomorrow","notify_summary":false}'
+
+  HaksikRetryStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/menu-retry-workflow.asl.json
+      DefinitionSubstitutions:
+        SchedulingFunctionArn: !GetAtt HaksikSchedulingFunction.Arn
+        NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn
+        Restaurant: HAKSIK
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref HaksikSchedulingFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref NotifyFailureFunction
+      Events:
+        WeeklySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 7 ? * SUN *)
+            Input: '{"schedule_mode":"next_week","notify_summary":true}'
+        RecoverySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(5 7 ? * MON-THU *)
+            Input: '{"schedule_mode":"tomorrow","notify_summary":false}'
+
+  FacultyRetryStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/menu-retry-workflow.asl.json
+      DefinitionSubstitutions:
+        SchedulingFunctionArn: !GetAtt FacultySchedulingFunction.Arn
+        NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn
+        Restaurant: FACULTY
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref FacultySchedulingFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref NotifyFailureFunction
+      Events:
+        WeeklySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 7 ? * SUN *)
+            Input: '{"schedule_mode":"next_week","notify_summary":true}'
+        RecoverySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(5 7 ? * MON-THU *)
+            Input: '{"schedule_mode":"tomorrow","notify_summary":false}'
+
   DormitoryRetryStateMachine:
     Type: AWS::Serverless::StateMachine
     Properties:
-      DefinitionUri: statemachine/dormitory-retry-workflow.asl.json
+      DefinitionUri: statemachine/menu-retry-workflow.asl.json
       DefinitionSubstitutions:
-        DormitorySchedulingFunctionArn: !GetAtt DormitorySchedulingFunction.Arn
+        SchedulingFunctionArn: !GetAtt DormitorySchedulingFunction.Arn
         NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn
+        Restaurant: DORMITORY
       Policies:
         - LambdaInvokePolicy:
             FunctionName: !Ref DormitorySchedulingFunction
@@ -314,3 +357,73 @@ Resources:
           Type: Schedule
           Properties:
             Schedule: cron(0 23 ? * SUN *)
+            Input: '{"schedule_mode":"current_week","notify_summary":true}'
+        RecoverySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(5 23 ? * MON-FRI *)
+            Input: '{"schedule_mode":"tomorrow","notify_summary":false}'
+
+  DodamRetryStateMachineAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Dodam menu workflow exhausted all retries
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref DodamRetryStateMachine
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  HaksikRetryStateMachineAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Haksik menu workflow exhausted all retries
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref HaksikRetryStateMachine
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  FacultyRetryStateMachineAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Faculty menu workflow exhausted all retries
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref FacultyRetryStateMachine
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  DormitoryRetryStateMachineAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Dormitory menu workflow exhausted all retries
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref DormitoryRetryStateMachine
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching

@@ -6,7 +6,7 @@ from typing import cast
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_PATH = ROOT / "template.yml"
 README_PATH = ROOT / "README.md"
-DORMITORY_ASL_PATH = ROOT / "statemachine" / "dormitory-retry-workflow.asl.json"
+MENU_ASL_PATH = ROOT / "statemachine" / "menu-retry-workflow.asl.json"
 
 FUNCTION_HANDLERS = {
     "DodamScrapingFunction": "functions.handler.lambda_handler",
@@ -80,7 +80,6 @@ def test_no_public_api_events_outputs_or_prohibited_resources():
         "AWS::SNS::Topic",
         "DeadLetterQueue",
         "DestinationConfig",
-        "AWS::CloudWatch::Alarm",
         "AWS::CloudWatch::Dashboard",
         "AWS::Logs::MetricFilter",
         "Tracing: Active",
@@ -120,48 +119,44 @@ def test_preserves_all_nine_functions_and_global_configuration():
         assert "!Ref PythonRequirementsLayer" in block
 
 
-def test_preserves_three_direct_schedules_and_dormitory_state_machine_schedule():
+def test_all_schedules_run_through_per_restaurant_state_machines():
     template = _template_text()
     resources = _resource_blocks(template)
 
-    assert template.count("Type: Schedule") == 4
+    assert template.count("Type: Schedule") == 8
     for function_id in DIRECT_SCHEDULE_FUNCTIONS:
-        block = resources[function_id]
-        assert block.count("Type: Schedule") == 1
-        assert "WeeklySchedule:" in block
-        assert "Schedule: cron(0 7 ? * SUN *)" in block
+        assert "Type: Schedule" not in resources[function_id]
 
     assert "Type: Schedule" not in resources["DormitorySchedulingFunction"]
 
-    state_machine = resources["DormitoryRetryStateMachine"]
-    assert "Type: AWS::Serverless::StateMachine" in state_machine
-    assert "DefinitionUri: statemachine/dormitory-retry-workflow.asl.json" in state_machine
-    assert "DormitorySchedulingFunctionArn: !GetAtt DormitorySchedulingFunction.Arn" in state_machine
-    assert "NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn" in state_machine
-    assert state_machine.count("LambdaInvokePolicy:") == 2
-    assert state_machine.count("Type: Schedule") == 1
-    assert "Schedule: cron(0 23 ? * SUN *)" in state_machine
-    assert "Logging:" not in state_machine
-    assert "MenuRetryStateMachine" not in resources
+    for restaurant in ("Dodam", "Haksik", "Faculty", "Dormitory"):
+        state_machine = resources[f"{restaurant}RetryStateMachine"]
+        assert "Type: AWS::Serverless::StateMachine" in state_machine
+        assert "DefinitionUri: statemachine/menu-retry-workflow.asl.json" in state_machine
+        assert "NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn" in state_machine
+        assert state_machine.count("LambdaInvokePolicy:") == 2
+        assert state_machine.count("Type: Schedule") == 2
+        assert "RecoverySchedule:" in state_machine
+        assert resources[f"{restaurant}RetryStateMachineAlarm"].count("AWS::CloudWatch::Alarm") == 1
 
 
-def test_preserves_dormitory_retry_workflow():
+def test_preserves_common_retry_workflow():
     workflow = cast(
         dict[str, object],
-        json.loads(DORMITORY_ASL_PATH.read_text(encoding="utf-8")),
+        json.loads(MENU_ASL_PATH.read_text(encoding="utf-8")),
     )
     states = cast(dict[str, object], workflow["States"])
-    invoke = cast(dict[str, object], states["InvokeDormitory"])
+    invoke = cast(dict[str, object], states["InvokeSchedule"])
     invoke_parameters = cast(dict[str, object], invoke["Parameters"])
     retries = cast(list[object], invoke["Retry"])
     notify = cast(dict[str, object], states["NotifyFinalFailure"])
     notify_parameters = cast(dict[str, object], notify["Parameters"])
 
-    assert workflow["StartAt"] == "InvokeDormitory"
-    assert set(states) == {"InvokeDormitory", "NotifyFinalFailure"}
-    assert invoke_parameters["FunctionName"] == "${DormitorySchedulingFunctionArn}"
+    assert workflow["StartAt"] == "InvokeSchedule"
+    assert set(states) == {"InvokeSchedule", "NotifyFinalFailure", "MarkExecutionFailed"}
+    assert invoke_parameters["FunctionName"] == "${SchedulingFunctionArn}"
     assert retries[1] == {
-        "ErrorEquals": ["RetryableEmptyMenuError", "RetryableApiSendError"],
+        "ErrorEquals": ["RetryableEmptyMenuError", "RetryableApiSendError", "RetryableMenuInterpretationError"],
         "IntervalSeconds": 7200,
         "MaxAttempts": 5,
         "BackoffRate": 1.0,

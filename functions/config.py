@@ -48,6 +48,16 @@ _OPERATIONS = MappingProxyType(
 )
 
 
+def load_restaurant_config(restaurant: object) -> Mapping[str, Any] | None:
+    """Return public metadata only for an allowlisted restaurant name."""
+    if not isinstance(restaurant, str):
+        return None
+    metadata = _RESTAURANTS.get(restaurant.upper())
+    if metadata is None:
+        return None
+    return MappingProxyType({"restaurant": restaurant.upper(), **metadata})
+
+
 def _required_environment(name: str) -> str:
     value = os.getenv(name)
     if not value:

@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = (ROOT / "template.yml").read_text(encoding="utf-8")
 ASL = json.loads(
-    (ROOT / "statemachine/dormitory-retry-workflow.asl.json").read_text(
+    (ROOT / "statemachine/menu-retry-workflow.asl.json").read_text(
         encoding="utf-8"
     )
 )
@@ -38,7 +38,7 @@ def test_authoritative_snapshot_has_exactly_nine_lambda_resources_and_handlers()
         if "Type: AWS::Serverless::Function" in block
     }
 
-    assert CONTRACT["authoritative_sha"] == "59d021dc5ad8a5d4a7449f4e807760dff4184d0e"
+    assert CONTRACT["authoritative_sha"] == "3719e46781cba3915ba8d2dd421726a1694e3e61"
     assert set(functions) == set(CONTRACT["functions"])
     assert len(functions) == CONTRACT["function_contract"]["count"] == 9
     for logical_id, handler in CONTRACT["functions"].items():
@@ -86,27 +86,27 @@ def test_lambda_global_configuration_and_function_policy_absence_are_frozen():
     assert function_policy_count == contract["function_policy_count"] == 0
 
 
-def test_three_eventbridge_inputs_and_state_machine_schedule_are_exact():
+def test_state_machine_weekly_and_recovery_schedules_are_exact():
     blocks = _resource_blocks()
     schedule = CONTRACT["general_schedule"]
 
-    for logical_id in schedule["logical_resources"]:
+    for logical_id in schedule["state_machines"]:
         block = blocks[logical_id]
-        assert f"Type: {schedule['event_type']}" in block
+        assert block.count(f"Type: {schedule['event_type']}") == 2
         assert f"Schedule: {schedule['expression']}" in block
-        assert '"trigger": "eventbridge"' in block
-        assert '"delayed_schedule": false' in block
+        assert schedule["weekly_input"] in block
+        assert schedule["recovery_input"] in block
     assert "Type: Schedule" not in blocks["DormitorySchedulingFunction"]
     assert (
         f"Schedule: {CONTRACT['dormitory_schedule']['expression']}"
         in blocks[CONTRACT["state_machine"]["logical_resource"]]
     )
-    assert TEMPLATE.count("Type: Schedule") == 4
+    assert TEMPLATE.count("Type: Schedule") == 8
 
 
-def test_dormitory_asl_payloads_substitutions_policies_and_retries_are_exact():
+def test_common_asl_payloads_substitutions_policies_and_retries_are_exact():
     state_machine = CONTRACT["state_machine"]
-    invoke = ASL["States"]["InvokeDormitory"]
+    invoke = ASL["States"]["InvokeSchedule"]
     notify = ASL["States"]["NotifyFinalFailure"]
     block = _resource_blocks()[state_machine["logical_resource"]]
 

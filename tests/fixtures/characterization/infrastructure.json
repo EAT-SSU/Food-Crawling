@@ -1,5 +1,5 @@
 {
-  "authoritative_sha": "59d021dc5ad8a5d4a7449f4e807760dff4184d0e",
+  "authoritative_sha": "3719e46781cba3915ba8d2dd421726a1694e3e61",
   "functions": {
     "DodamScrapingFunction": "functions.handler.lambda_handler",
     "HaksikScrapingFunction": "functions.handler.lambda_handler",
@@ -34,23 +34,24 @@
     "function_policy_count": 0
   },
   "general_schedule": {
-    "logical_resources": ["DodamSchedulingFunction", "HaksikSchedulingFunction", "FacultySchedulingFunction"],
+    "state_machines": ["DodamRetryStateMachine", "HaksikRetryStateMachine", "FacultyRetryStateMachine"],
     "expression": "cron(0 7 ? * SUN *)",
-    "input": {"trigger": "eventbridge", "delayed_schedule": false},
+    "weekly_input": "{\"schedule_mode\":\"next_week\",\"notify_summary\":true}",
+    "recovery_input": "{\"schedule_mode\":\"tomorrow\",\"notify_summary\":false}",
     "event_type": "Schedule"
   },
   "dormitory_schedule": {"expression": "cron(0 23 ? * SUN *)"},
   "state_machine": {
     "logical_resource": "DormitoryRetryStateMachine",
-    "definition": "statemachine/dormitory-retry-workflow.asl.json",
+    "definition": "statemachine/menu-retry-workflow.asl.json",
     "substitutions": {
-      "DormitorySchedulingFunctionArn": "DormitorySchedulingFunction.Arn",
+      "SchedulingFunctionArn": "DormitorySchedulingFunction.Arn",
       "NotifyFailureFunctionArn": "NotifyFailureFunction.Arn"
     },
     "policies": ["DormitorySchedulingFunction", "NotifyFailureFunction"],
-    "invoke_payload": {"trigger": "step_functions", "execution_id.$": "$$.Execution.Id", "retry_count.$": "$$.State.RetryCount", "delayed_schedule": false},
-    "failure_payload": {"trigger": "step_functions", "execution_id.$": "$$.Execution.Id", "restaurant": "DORMITORY", "error_type.$": "$.error.Error"},
+    "invoke_payload": {"trigger": "step_functions", "execution_id.$": "$$.Execution.Id", "retry_count.$": "$$.State.RetryCount", "schedule_anchor.$": "$$.Execution.StartTime", "schedule_mode.$": "$.schedule_mode", "notify_summary.$": "$.notify_summary"},
+    "failure_payload": {"trigger": "step_functions", "execution_id.$": "$$.Execution.Id", "restaurant": "${Restaurant}", "schedule_anchor.$": "$$.Execution.StartTime", "schedule_mode.$": "$.schedule_mode", "error_type.$": "$.error.Error"},
     "local_retry": {"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2.0},
-    "domain_retry": {"ErrorEquals": ["RetryableEmptyMenuError", "RetryableApiSendError"], "IntervalSeconds": 7200, "MaxAttempts": 5, "BackoffRate": 1.0}
+    "domain_retry": {"ErrorEquals": ["RetryableEmptyMenuError", "RetryableApiSendError", "RetryableMenuInterpretationError"], "IntervalSeconds": 7200, "MaxAttempts": 5, "BackoffRate": 1.0}
   }
 }

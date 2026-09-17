@@ -1,12 +1,14 @@
 import asyncio
 import json
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
-from functions import handler  # pyright: ignore[reportAttributeAccessIssue]
+from functions import handler, menu_ai  # pyright: ignore[reportAttributeAccessIssue]
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -575,3 +577,197 @@ def test_direct_dormitory_fetches_seven_dates_once_and_aggregates_weekly_respons
     assert body["date"] == "20260713_weekly"
     assert body["message"] == "기숙사식당 주간 메뉴 처리 완료 (7일치)"
     assert set(body["menus"]) == {f"{date}_중식1" for date in dates}
+
+
+def test_parse_event_allowlists_schedule_mode_and_defaults_notify_summary_true():
+    assert handler.parse_event({"schedule_mode": "tomorrow"})["schedule_mode"] == "tomorrow"
+    assert handler.parse_event({"schedule_mode": "unsafe"})["schedule_mode"] is None
+    assert handler.parse_event({"schedule_mode": ["tomorrow"]})["schedule_mode"] is None
+    assert handler.parse_event({})["notify_summary"] is True
+    assert handler.parse_event({"notify_summary": False})["notify_summary"] is False
+    assert handler.parse_event({"notify_summary": "unsafe"})["notify_summary"] is True
+
+
+def test_tomorrow_schedule_uses_asia_seoul_date():
+    config = handler.load_operation_config("schedule_haksik")
+    assert config is not None
+    request = handler.parse_event({"schedule_mode": "tomorrow"})
+    fixed_now = datetime(2026, 9, 17, 23, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+
+    with patch.object(handler, "_now_seoul", return_value=fixed_now):
+        assert handler._dates_for(config, request) == ["20260918"]
+
+
+def test_schedule_anchor_keeps_next_week_stable_after_retry_crosses_monday():
+    config = handler.load_operation_config("schedule_haksik")
+    assert config is not None
+    request = handler.parse_event(
+        {
+            "schedule_mode": "next_week",
+            "schedule_anchor": "2026-09-20T07:00:00Z",
+        }
+    )
+
+    assert handler._dates_for(config, request) == [
+        "20260921", "20260922", "20260923", "20260924", "20260925"
+    ]
+
+
+def test_quiet_schedule_suppresses_only_date_summary_slack():
+    scrape = AsyncMock(return_value=[_raw("20260918", "HAKSIK")])
+    slack = AsyncMock()
+    with (
+        patch.object(handler, "scrape", scrape),
+        patch.object(
+            handler,
+            "interpret_menu",
+            AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
+        ),
+        patch.object(handler, "publish_menu", AsyncMock(return_value=_accepted())),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        response = handler.lambda_handler(
+            {
+                "operation": "schedule_haksik",
+                "target_date": "20260918",
+                "notify_summary": False,
+            },
+            _Context(),
+        )
+
+    assert response["statusCode"] == 200
+    slack.assert_not_awaited()
+
+
+def test_scheduled_menu_validation_failure_is_retryable_for_any_restaurant():
+    error = menu_ai.MenuInterpretationError("unsafe model output", "INVALID_TOOL_CALL")
+    with (
+        patch.object(handler, "scrape", AsyncMock(return_value=[_raw("20260918", "HAKSIK")])),
+        patch.object(handler, "interpret_menu", AsyncMock(side_effect=error)),
+        patch.object(handler, "publish_menu", AsyncMock()),
+        patch.object(handler, "notify_slack", AsyncMock()) as slack,
+    ):
+        with pytest.raises(handler.RetryableMenuInterpretationError) as raised:
+            handler.lambda_handler(
+                {"operation": "schedule_haksik", "target_date": "20260918"},
+                _Context(),
+            )
+
+    assert raised.value.target_date == "20260918"
+    assert raised.value.restaurant == "HAKSIK"
+    slack.assert_not_awaited()
+
+
+def test_direct_menu_validation_failure_remains_400_summary():
+    error = menu_ai.MenuInterpretationError("unsafe model output", "INVALID_TOOL_CALL")
+    with (
+        patch.object(handler, "scrape", AsyncMock(return_value=[_raw("20260918", "HAKSIK")])),
+        patch.object(handler, "interpret_menu", AsyncMock(side_effect=error)),
+        patch.object(handler, "publish_menu", AsyncMock()) as publish,
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        response = handler.lambda_handler(
+            {"operation": "scrape_haksik", "target_date": "20260918"}, _Context()
+        )
+
+    assert response["statusCode"] == 400
+    publish.assert_not_awaited()
+
+
+def test_scheduled_provider_failure_is_retryable_for_step_functions():
+    with (
+        patch.object(handler, "scrape", AsyncMock(return_value=[_raw("20260918", "HAKSIK")])),
+        patch.object(handler, "interpret_menu", AsyncMock(side_effect=RuntimeError("secret"))),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        with pytest.raises(handler.RetryableMenuInterpretationError) as raised:
+            handler.lambda_handler(
+                {"operation": "schedule_haksik", "target_date": "20260918"},
+                _Context(),
+            )
+
+    assert raised.value.restaurant == "HAKSIK"
+    assert raised.value.reason_code == "PROVIDER_FAILURE"
+
+
+def test_generic_final_failure_resolves_allowlisted_restaurant_and_schedule_date():
+    slack = AsyncMock()
+    with (
+        patch.object(handler, "notify_slack", slack),
+        patch.object(handler, "_week_dates", return_value=["20260921"]),
+    ):
+        response = handler.lambda_handler(
+            {
+                "operation": "notify_final_failure",
+                "restaurant": "HAKSIK",
+                "schedule_mode": "next_week",
+                "error_type": "RetryableMenuInterpretationError",
+            },
+            _Context(),
+        )
+
+    assert response["statusCode"] == 200
+    assert slack.await_args is not None
+    assert slack.await_args.args[0]["slack_webhook_url"] == "https://hooks.slack.test/webhook"
+    notification = slack.await_args.args[1]
+    assert notification["restaurant"] == "학생식당"
+    assert notification["date"] == "20260921"
+    assert notification["error_type"] == "RetryableMenuInterpretationError"
+
+
+def test_scheduled_empty_failure_uses_actual_restaurant_name():
+    class SourceError(RuntimeError):
+        outcome = "AMBIGUOUS_EMPTY"
+
+    source_error = SourceError("unsafe source detail")
+    with (
+        patch.object(handler, "scrape", AsyncMock(side_effect=source_error)),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        with pytest.raises(handler.RetryableEmptyMenuError) as raised:
+            handler.lambda_handler(
+                {"operation": "schedule_haksik", "target_date": "20260918"},
+                _Context(),
+            )
+
+    assert raised.value.restaurant == "HAKSIK"
+
+
+def test_scheduled_api_failure_uses_actual_restaurant_name():
+    with (
+        patch.object(handler, "scrape", AsyncMock(return_value=[_raw("20260918", "HAKSIK")])),
+        patch.object(
+            handler,
+            "interpret_menu",
+            AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
+        ),
+        patch.object(
+            handler,
+            "publish_menu",
+            AsyncMock(side_effect=[_accepted(), RuntimeError("unsafe API detail")]),
+        ),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        with pytest.raises(handler.RetryableApiSendError) as raised:
+            handler.lambda_handler(
+                {"operation": "schedule_haksik", "target_date": "20260918"},
+                _Context(),
+            )
+
+    assert raised.value.restaurant == "HAKSIK"
+
+
+def test_notify_summary_false_does_not_suppress_final_failure_slack():
+    slack = AsyncMock()
+    with patch.object(handler, "notify_slack", slack):
+        handler.lambda_handler(
+            {
+                "operation": "notify_final_failure",
+                "target_date": "20260918",
+                "notify_summary": False,
+                "error_type": "RetryableMenuInterpretationError",
+            },
+            _Context(),
+        )
+
+    slack.assert_awaited_once()

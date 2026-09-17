@@ -215,6 +215,7 @@ def format_slack_text(notification: Mapping[str, object]) -> str:
         allowed_errors = {
             "RetryableEmptyMenuError": "메뉴 미게시",
             "RetryableApiSendError": "메뉴 저장 실패",
+            "RetryableMenuInterpretationError": "메뉴 파싱 실패",
             "Lambda.ServiceException": "Lambda 서비스 오류",
             "Lambda.AWSLambdaException": "Lambda 실행 오류",
             "Lambda.SdkClientException": "Lambda 호출 오류",

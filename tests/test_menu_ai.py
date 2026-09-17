@@ -334,29 +334,132 @@ async def test_transient_provider_failure_retries_three_times_without_test_sleep
     completion = AsyncMock(side_effect=RuntimeError("transient"))
     client = MagicMock()
     client.chat.completions.create = completion
-    request_completion = cast(Any, menu_ai._request_completion)
-    original_wait = request_completion.retry.wait
-    request_completion.retry.wait = wait_none()
+    request_and_parse = cast(Any, menu_ai._request_and_parse)
+    original_wait = request_and_parse.retry.wait
+    request_and_parse.retry.wait = wait_none()
     try:
         with patch("functions.menu_ai.AsyncOpenAI", return_value=client):
             with pytest.raises(RuntimeError, match="transient"):
                 await menu_ai.interpret_menu("secret", "DORMITORY", "밥")
     finally:
-        request_completion.retry.wait = original_wait
+        request_and_parse.retry.wait = original_wait
 
     assert completion.await_count == 3
-    assert request_completion.retry.stop.max_attempt_number == 3
+    assert request_and_parse.retry.stop.max_attempt_number == 3
     assert original_wait.wait_fixed == 5
 
 
 @pytest.mark.asyncio
-async def test_malformed_completion_is_not_retried():
-    completion = AsyncMock(return_value=_response("{"))
+async def test_malformed_completion_retries_fresh_completions_three_times():
+    completion = AsyncMock(
+        side_effect=[_response("{"), _response("{"), _response(_valid_dormitory())]
+    )
     client = MagicMock()
     client.chat.completions.create = completion
+    request_and_parse = cast(Any, menu_ai._request_and_parse)
+    original_wait = request_and_parse.retry.wait
+    request_and_parse.retry.wait = wait_none()
+    try:
+        with patch("functions.menu_ai.AsyncOpenAI", return_value=client):
+            result = await menu_ai.interpret_menu(
+                "secret", "DORMITORY", "김치찌개 쌀밥 계란말이"
+            )
+    finally:
+        request_and_parse.retry.wait = original_wait
 
-    with patch("functions.menu_ai.AsyncOpenAI", return_value=client):
-        with pytest.raises(menu_ai.MenuInterpretationError, match="valid JSON"):
-            await menu_ai.interpret_menu("secret", "DORMITORY", "밥")
+    assert completion.await_count == 3
+    assert result["menuNames"] == ["김치찌개", "쌀밥", "계란말이"]
 
-    completion.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_exhausted_provider_retry_is_not_multiplied_by_validation_retry():
+    completion = AsyncMock(side_effect=RuntimeError("provider secret"))
+    client = MagicMock()
+    client.chat.completions.create = completion
+    request_and_parse = cast(Any, menu_ai._request_and_parse)
+    original_wait = request_and_parse.retry.wait
+    request_and_parse.retry.wait = wait_none()
+    try:
+        with patch("functions.menu_ai.AsyncOpenAI", return_value=client):
+            with pytest.raises(RuntimeError, match="provider secret"):
+                await menu_ai.interpret_menu("secret", "DORMITORY", "밥")
+    finally:
+        request_and_parse.retry.wait = original_wait
+
+    assert completion.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_transport_and_validation_failures_share_one_three_call_budget():
+    completion = AsyncMock(
+        side_effect=[RuntimeError("transient"), _response("{"), _response(_valid_dormitory())]
+    )
+    client = MagicMock()
+    client.chat.completions.create = completion
+    request_and_parse = cast(Any, menu_ai._request_and_parse)
+    original_wait = request_and_parse.retry.wait
+    request_and_parse.retry.wait = wait_none()
+    try:
+        with patch("functions.menu_ai.AsyncOpenAI", return_value=client):
+            result = await menu_ai.interpret_menu(
+                "secret", "DORMITORY", "김치찌개 쌀밥 계란말이"
+            )
+    finally:
+        request_and_parse.retry.wait = original_wait
+
+    assert completion.await_count == 3
+    assert result["menuNames"] == ["김치찌개", "쌀밥", "계란말이"]
+
+
+@pytest.mark.parametrize(
+    ("call", "expected_reason"),
+    [
+        (
+            lambda: menu_ai.validate_tool_arguments([], "DORMITORY", "밥"),
+            "INVALID_TOOL_ARGUMENTS",
+        ),
+        (
+            lambda: menu_ai.validate_tool_arguments(
+                {"menuNames": ["밥", "밥"], "mainCandidates": []},
+                "DORMITORY",
+                "밥",
+            ),
+            "DUPLICATE_MENU_NAMES",
+        ),
+        (
+            lambda: menu_ai.parse_tool_response(_response("{"), "DORMITORY", "밥"),
+            "INVALID_TOOL_ARGUMENTS_JSON",
+        ),
+        (
+            lambda: menu_ai.parse_tool_response(
+                _response({}, name="https://provider.invalid/secret"),
+                "DORMITORY",
+                "밥",
+            ),
+            "UNEXPECTED_TOOL_NAME",
+        ),
+        (
+            lambda: menu_ai.validate_tool_arguments(
+                {
+                    "menuNames": ["밥"],
+                    "mainCandidates": [{"menuIndex": 0, "nameEn": "쌀밥"}],
+                },
+                "DORMITORY",
+                "밥",
+            ),
+            "NON_ENGLISH_NAME_EN",
+        ),
+    ],
+)
+def test_validation_errors_expose_allowlisted_reason_codes(call, expected_reason):
+    with pytest.raises(menu_ai.MenuInterpretationError) as raised:
+        call()
+
+    assert raised.value.reason_code == expected_reason
+    assert raised.value.reason_code in menu_ai.MENU_INTERPRETATION_REASON_CODES
+
+
+def test_unknown_reason_code_collapses_to_generic_allowlisted_reason():
+    error = menu_ai.MenuInterpretationError("untrusted detail", "PROVIDER_SECRET")
+
+    assert error.reason_code == "VALIDATION_FAILED"
