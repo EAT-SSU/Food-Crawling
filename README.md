@@ -14,7 +14,7 @@ AWS Lambda를 이용하여 학교 식당 메뉴를 스크랩하고 Slack으로 �
 - AWS Lambda: 메뉴 스크랩 및 가공 로직 실행
 - AWS IAM: 인증된 사용자와 역할에 Lambda 수동 호출 권한 부여
 - AWS EventBridge: 스케줄링된 스크랩 작업 관리
-- AWS Step Functions: 기숙사식당 재시도 워크플로우
+- AWS Step Functions: 식당별 재시도 및 최종 실패 알림 워크플로우
 - AWS SAM: 인프라 관리 및 배포 자동화
 
 ## 런타임 아키텍처
@@ -69,29 +69,34 @@ AWS Lambda를 이용하여 학교 식당 메뉴를 스크랩하고 Slack으로 �
 | `HaksikSchedulingFunction` | `schedule_haksik` | 학생식당 주간 스케줄 |
 | `FacultySchedulingFunction` | `schedule_faculty` | 교직원식당 주간 스케줄 |
 | `DormitorySchedulingFunction` | `schedule_dormitory` | 기숙사식당 주간 스케줄 (Step Functions 호출) |
-| `NotifyFailureFunction` | `notify_final_failure` | 기숙사 최종 실패 Slack 알림 |
+| `NotifyFailureFunction` | `notify_final_failure` | 식당별 최종 실패 Slack 알림 |
 
 각 함수에 대응하는 CloudWatch 로그 그룹(`*LogGroup`)이 9개 추가로 존재하며, 로그는 30일간 보존됩니다.
 
 ### 자동 스케줄
 
-- **도담/학생/교직원식당 스케줄링**: 매주 일요일 오후 4시 KST (UTC 07:00) 자동 실행
-- **기숙사식당 Step Functions**: 매주 일요일 23:00 UTC (월요일 08:00 KST) 자동 실행, 내부에서 `DormitorySchedulingFunction`과 `NotifyFailureFunction` 호출
+- **도담/학생/교직원식당**: 매주 일요일 오후 4시 KST (UTC 07:00)에 다음 주 메뉴 실행
+- **기숙사식당**: 매주 월요일 오전 8시 KST (일요일 23:00 UTC)에 현재 주 메뉴 실행
+- 각 식당은 Step Functions를 통해 실행되며, 평일 복구 스케줄은 다음 날 메뉴 한 건만 다시 처리하고 성공 Slack 요약은 생략합니다.
 
 ### 직접 호출 vs 스케줄 실행
 
 - **직접 호출(scrape_*)**: `is_dev=True` — dev Spring 클라이언트만 호출, dev 실패가 critical
 - **스케줄 실행(schedule_*)**: dev와 prod 모두 호출, prod 실패만 critical
 
-### 기숙사 Step Functions 재시도
+### Step Functions 재시도
 
-- **도메인 재시도** (`RetryableEmptyMenuError`, `RetryableApiSendError`): 최대 5회, 7200초 간격, 백오프 1.0
+- **도메인 재시도** (`RetryableEmptyMenuError`, `RetryableApiSendError`, `RetryableMenuInterpretationError`): 최대 5회, 7200초 간격, 백오프 1.0
 - **Lambda 일시 오류 재시도** (`Lambda.ServiceException` 등): 최대 3회, 2초 간격, 백오프 2.0
 - 모든 재시도 소진 후 `NotifyFailureFunction`으로 최종 실패 알림
+- GPT 응답 계약 위반은 Lambda 내부에서 새 응답을 최대 3회 요청한 뒤 Step Functions 재시도로 승격합니다.
+- 검증 실패 로그에는 날짜, 슬롯, 허용된 사유 코드만 기록하며 메뉴 원문, 모델 응답, API 키는 기록하지 않습니다.
+- 상태머신 시작 시각을 날짜 기준점으로 전달하므로 자정을 넘겨 재시도해도 대상 주/날짜가 바뀌지 않습니다.
+- Spring은 동일 날짜·식당·시간대와 동일 메뉴 집합을 기존 식사로 재사용하므로 워크플로우 재실행을 중복 레코드 없이 처리합니다.
 
 ### 최종 실패 알림
 
-`notify_final_failure`의 Slack 호출이 실패하면 예외가 그대로 전파됩니다. 보호할 Spring 쓰기가 없으므로 격리하지 않습니다.
+`notify_final_failure`의 Slack 호출이 실패하면 예외가 그대로 전파됩니다. 보호할 Spring 쓰기가 없으므로 격리하지 않습니다. 최종 실패를 알린 상태머신 실행은 `FAILED`로 종료되어 식당별 CloudWatch Alarm에도 남습니다.
 
 ## 환경 설정
 
