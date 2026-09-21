@@ -43,6 +43,10 @@ _DORMITORY_WEEKEND_CLOSURE = re.compile(
 _DORMITORY_WEEKEND_REOPENING = re.compile(
     r"(?P<month>\d{1,2})\s*월\s*(?P<day>\d{1,2})\s*일.{0,40}?주말\s*정상\s*운영"
 )
+_DORMITORY_CLOSURE_RANGE = re.compile(
+    r"(?P<start>\d{1,2})\s*일.{0,40}?[~∼〜-]\s*(?P<end>\d{1,2})\s*일"
+    r".{0,100}?식당\s*운영을\s*하지\s*않습니다"
+)
 
 
 @dataclass(frozen=True)
@@ -314,6 +318,26 @@ def _dormitory_weekend_reopening(
         return None
 
 
+def _dormitory_announced_closures(
+    soup: BeautifulSoup, ordered_dates: Sequence[str]
+) -> set[str]:
+    page_text = _normalized_text(soup.get_text(" ", strip=True))
+    closed_dates: set[str] = set()
+    for match in _DORMITORY_CLOSURE_RANGE.finditer(page_text):
+        start_day = int(match.group("start"))
+        end_day = int(match.group("end"))
+        if start_day > end_day:
+            continue
+        closed_dates.update(
+            requested_date
+            for requested_date in ordered_dates
+            if start_day
+            <= datetime.strptime(requested_date, "%Y%m%d").day
+            <= end_day
+        )
+    return closed_dates
+
+
 def _is_dormitory_non_menu(value: str) -> bool:
     normalized = _normalized_text(value)
     return (
@@ -331,6 +355,7 @@ def parse_dormitory_html(
     error_date = ordered_dates[0]
     soup = BeautifulSoup(html_content, "html.parser")
     reopening = _dormitory_weekend_reopening(soup, ordered_dates)
+    announced_closures = _dormitory_announced_closures(soup, ordered_dates)
     closed_weekends = {
         requested_date
         for requested_date in ordered_dates
@@ -370,6 +395,21 @@ def parse_dormitory_html(
         ]
         for date in closed_weekends
     }
+    records_by_date.update(
+        {
+            date: [
+                MealRecord(
+                    date,
+                    "DORMITORY",
+                    "전체",
+                    "",
+                    outcome=EXPECTED_EMPTY,
+                    reason_code="HOLIDAY",
+                )
+            ]
+            for date in announced_closures
+        }
+    )
     for row in matrix[1:]:
         raw_date = row[date_index] if date_index < len(row) else None
         if raw_date is None:
@@ -377,7 +417,7 @@ def parse_dormitory_html(
         date = _source_date(raw_date, requested)
         if date is None:
             continue
-        if date in closed_weekends:
+        if date in closed_weekends or date in announced_closures:
             continue
 
         day_records: list[MealRecord] = []

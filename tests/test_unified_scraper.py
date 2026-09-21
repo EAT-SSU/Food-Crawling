@@ -167,6 +167,38 @@ def test_dormitory_notice_and_punctuation_cells_are_not_menu_records():
     assert all(record.raw_text == "" for record in records)
 
 
+def test_dormitory_holiday_range_notice_marks_each_closed_date_expected_empty():
+    html = _dormitory_html(
+        ["날짜", "조식", "중식", "석식"],
+        [
+            ["2026-09-21 (월)", "미운영", "제육볶음", "가츠동"],
+            [
+                "2026-09-24 (목)",
+                "(추석연휴) 24일(목)~27일(일요일) 식당운영을 하지 않습니다.",
+                ".",
+                ".",
+            ],
+            ["2026-09-25 (금)", "", "", ""],
+            ["2026-09-26 (토)", "", "", ""],
+            ["2026-09-27 (일)", "", "", ""],
+        ],
+    )
+
+    records = parse_dormitory_html(
+        html,
+        ["20260921", "20260924", "20260925", "20260926", "20260927"],
+    )
+
+    closed = [record for record in records if record.date != "20260921"]
+    assert [record.date for record in closed] == [
+        "20260924", "20260925", "20260926", "20260927"
+    ]
+    assert all(record.source_slot == "전체" for record in closed)
+    assert all(record.outcome == EXPECTED_EMPTY for record in closed)
+    assert all(record.reason_code == "HOLIDAY" for record in closed)
+
+
+
 def test_soongguri_holiday_and_slot_empty_outcomes_are_explicit():
     with pytest.raises(HolidayError) as raised:
         parse_soongguri_html("<main>오늘은 쉽니다.</main>", "20260713", "DODAM")
