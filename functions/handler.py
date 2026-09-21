@@ -354,8 +354,9 @@ async def _process_source_date(
     scheduled: bool,
     requested_dates: Sequence[str] | None = None,
     notify_summary: bool = True,
+    retry_failures: bool = True,
 ) -> list[dict[str, Any]]:
-    workflow_retry = scheduled
+    workflow_retry = scheduled and retry_failures
     try:
         if requested_dates is None:
             raw_meals = list(await scrape(config, target_date))
@@ -380,14 +381,26 @@ async def _process_source_date(
                 "reason_code": reason_code,
             }
         ]
-    if workflow_retry and requested_dates is not None:
+    if scheduled and requested_dates is not None:
         represented_dates = {
             meal_date
             for raw_meal in raw_meals
             if (meal_date := _date(raw_meal.get("date"))) is not None
         }
-        if set(requested_dates) - represented_dates:
+        missing_dates = set(requested_dates) - represented_dates
+        if workflow_retry and missing_dates:
             raise RetryableEmptyMenuError(target_date, config["restaurant"])
+        raw_meals.extend(
+            {
+                "date": missing_date,
+                "source_slot": "전체",
+                "raw_text": "",
+                "source_english": (),
+                "outcome": "AMBIGUOUS_EMPTY",
+                "reason_code": "MISSING_DATE",
+            }
+            for missing_date in sorted(missing_dates)
+        )
 
     summaries: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
@@ -672,6 +685,7 @@ async def _run_schedule(
 ) -> dict[str, Any]:
     del event
     dates = _dates_for(config, request)
+    retry_failures = len(dates) == 1
     results: list[dict[str, Any]] = []
     if config["restaurant"] == "DORMITORY":
         results.extend(
@@ -681,6 +695,7 @@ async def _run_schedule(
                 scheduled=True,
                 requested_dates=dates,
                 notify_summary=request["notify_summary"],
+                retry_failures=retry_failures,
             )
         )
     else:
@@ -691,6 +706,7 @@ async def _run_schedule(
                     target_date,
                     scheduled=True,
                     notify_summary=request["notify_summary"],
+                    retry_failures=retry_failures,
                 )
             )
     return _response(200, results)

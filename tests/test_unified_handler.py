@@ -445,13 +445,13 @@ def test_empty_source_records_bypass_gpt_and_use_safe_summary():
     assert slack.await_args.args[1]["empty_reasons"] == {"중식1": "CLOSED_MARKER"}
 
 
-def test_partial_dormitory_week_retries_before_ai_spring_or_slack():
+def test_partial_dormitory_week_isolates_missing_date_and_processes_others():
     dates = [f"202607{day:02d}" for day in range(13, 20)]
     scrape = AsyncMock(
         return_value=[_raw(date, "DORMITORY") for date in dates if date != dates[2]]
     )
-    interpret = AsyncMock()
-    publish = AsyncMock()
+    interpret = AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []})
+    publish = AsyncMock(return_value=_accepted())
     slack = AsyncMock()
 
     with (
@@ -461,13 +461,53 @@ def test_partial_dormitory_week_retries_before_ai_spring_or_slack():
         patch.object(handler, "publish_menu", publish),
         patch.object(handler, "notify_slack", slack),
     ):
-        with pytest.raises(handler.RetryableEmptyMenuError) as raised:
-            handler.lambda_handler({"operation": "schedule_dormitory"}, _Context())
+        response = handler.lambda_handler({"operation": "schedule_dormitory"}, _Context())
 
-    assert raised.value.target_date == dates[0]
-    interpret.assert_not_awaited()
-    publish.assert_not_awaited()
-    slack.assert_not_awaited()
+    results = json.loads(response["body"])
+    missing = next(result for result in results if result["date"] == dates[2])
+    assert response["statusCode"] == 200
+    assert missing["success"] is False
+    assert missing["error_slots"] == {"전체": "MISSING_DATE"}
+    assert interpret.await_count == 6
+    assert publish.await_count == 12
+    assert slack.await_count == 7
+
+
+def test_weekly_dormitory_failure_is_isolated_to_its_date():
+    dates = ["20260921", "20260922"]
+    failed_record = {
+        "date": dates[1],
+        "restaurant": "DORMITORY",
+        "source_slot": "중식",
+        "raw_text": "",
+        "source_english": (),
+        "outcome": "AMBIGUOUS_EMPTY",
+        "reason_code": "EMPTY_CELL",
+    }
+    scrape = AsyncMock(return_value=[_raw(dates[0], "DORMITORY"), failed_record])
+    slack = AsyncMock()
+
+    with (
+        patch.object(handler, "_week_dates", return_value=dates),
+        patch.object(handler, "scrape", scrape),
+        patch.object(
+            handler,
+            "interpret_menu",
+            AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
+        ),
+        patch.object(handler, "publish_menu", AsyncMock(return_value=_accepted())),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        response = handler.lambda_handler(
+            {"operation": "schedule_dormitory", "schedule_mode": "current_week"},
+            _Context(),
+        )
+
+    results = json.loads(response["body"])
+    assert response["statusCode"] == 200
+    assert [result["success"] for result in results] == [True, False]
+    assert results[1]["error_slots"] == {"중식": "EMPTY_CELL"}
+    assert slack.await_count == 2
 
 
 def test_complete_dormitory_week_including_closed_date_keeps_current_behavior():
