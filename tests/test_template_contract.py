@@ -119,15 +119,11 @@ def test_preserves_all_nine_functions_and_global_configuration():
         assert "!Ref PythonRequirementsLayer" in block
 
 
-def test_all_schedules_run_through_per_restaurant_state_machines():
+def test_only_weekly_schedules_use_retry_state_machines():
     template = _template_text()
     resources = _resource_blocks(template)
 
     assert template.count("Type: ScheduleV2") == 9
-    for function_id in DIRECT_SCHEDULE_FUNCTIONS:
-        assert "Type: Schedule" not in resources[function_id]
-
-    assert "Type: Schedule" not in resources["DormitorySchedulingFunction"]
 
     for restaurant in ("Dodam", "Haksik", "Faculty", "Dormitory"):
         state_machine = resources[f"{restaurant}RetryStateMachine"]
@@ -135,11 +131,15 @@ def test_all_schedules_run_through_per_restaurant_state_machines():
         assert "DefinitionUri: statemachine/menu-retry-workflow.asl.json" in state_machine
         assert "NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn" in state_machine
         assert state_machine.count("LambdaInvokePolicy:") == 2
-        expected_schedule_count = 3 if restaurant == "Dormitory" else 2
+        expected_schedule_count = 0 if restaurant == "Dormitory" else 1
         assert state_machine.count("Type: ScheduleV2") == expected_schedule_count
-        expected_recovery = "DeadlineSchedule:" if restaurant == "Dormitory" else "RecoverySchedule:"
-        assert expected_recovery in state_machine
         assert resources[f"{restaurant}RetryStateMachineAlarm"].count("AWS::CloudWatch::Alarm") == 1
+
+    for function_id in DIRECT_SCHEDULE_FUNCTIONS:
+        assert resources[function_id].count("Type: ScheduleV2") == 1
+        assert "RecoverySchedule:" in resources[function_id]
+    assert resources["DormitorySchedulingFunction"].count("Type: ScheduleV2") == 3
+    assert "DeadlineSchedule:" in resources["DormitorySchedulingFunction"]
 
 
 def test_preserves_common_retry_workflow():
@@ -154,10 +154,16 @@ def test_preserves_common_retry_workflow():
     notify = cast(dict[str, object], states["NotifyFinalFailure"])
     notify_parameters = cast(dict[str, object], notify["Parameters"])
 
-    assert workflow["StartAt"] == "InvokeSchedule"
-    assert set(states) == {"InvokeSchedule", "NotifyFinalFailure", "MarkExecutionFailed"}
+    assert workflow["StartAt"] == "PrepareInput"
+    assert set(states) == {
+        "PrepareInput",
+        "MergeInput",
+        "InvokeSchedule",
+        "NotifyFinalFailure",
+        "MarkExecutionFailed",
+    }
     assert invoke_parameters["FunctionName"] == "${SchedulingFunctionArn}"
-    assert retries[1] == {
+    assert retries[2] == {
         "ErrorEquals": ["RetryableEmptyMenuError", "RetryableApiSendError", "RetryableMenuInterpretationError"],
         "IntervalSeconds": 7200,
         "MaxAttempts": 9,

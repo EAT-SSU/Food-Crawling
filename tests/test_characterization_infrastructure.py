@@ -55,7 +55,6 @@ def test_manual_invocation_surface_has_zero_public_apis_or_function_urls():
         "HaksikScrapingFunction",
         "FacultyScrapingFunction",
         "DormitoryScrapingFunction",
-        "DormitorySchedulingFunction",
         "NotifyFailureFunction",
     }
 
@@ -92,13 +91,15 @@ def test_state_machine_weekly_and_recovery_schedules_are_exact():
 
     for logical_id in schedule["state_machines"]:
         block = blocks[logical_id]
-        assert block.count(f"Type: {schedule['event_type']}") == 2
+        assert block.count(f"Type: {schedule['event_type']}") == 1
         assert f"ScheduleExpression: {schedule['expression']}" in block
-        assert block.count("ScheduleExpressionTimezone: Asia/Seoul") == 2
+        assert block.count("ScheduleExpressionTimezone: Asia/Seoul") == 1
         assert schedule["weekly_input"] in block
+    for logical_id in schedule["scheduling_functions"]:
+        block = blocks[logical_id]
+        assert block.count(f"Type: {schedule['event_type']}") == 1
         assert schedule["recovery_input"] in block
-    assert "Type: Schedule" not in blocks["DormitorySchedulingFunction"]
-    dormitory_block = blocks[CONTRACT["state_machine"]["logical_resource"]]
+    dormitory_block = blocks["DormitorySchedulingFunction"]
     for expression in CONTRACT["dormitory_schedule"]["expressions"]:
         assert f"ScheduleExpression: {expression}" in dormitory_block
     assert TEMPLATE.count("Type: ScheduleV2") == 9
@@ -112,7 +113,11 @@ def test_common_asl_payloads_substitutions_policies_and_retries_are_exact():
 
     assert invoke["Parameters"]["Payload"] == state_machine["invoke_payload"]
     assert notify["Parameters"]["Payload"] == state_machine["failure_payload"]
-    assert invoke["Retry"] == [state_machine["local_retry"], state_machine["domain_retry"]]
+    assert invoke["Retry"] == [
+        state_machine["local_retry"],
+        state_machine["throttle_retry"],
+        state_machine["domain_retry"],
+    ]
     assert invoke["Catch"] == [
         {
             "ErrorEquals": ["States.ALL"],
