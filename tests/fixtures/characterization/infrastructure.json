@@ -35,12 +35,12 @@
   },
   "general_schedule": {
     "state_machines": ["DodamRetryStateMachine", "HaksikRetryStateMachine", "FacultyRetryStateMachine"],
-    "expression": "cron(0 7 ? * SUN *)",
+    "expression": "cron(0 16 ? * SUN *)",
     "weekly_input": "{\"schedule_mode\":\"next_week\",\"notify_summary\":true}",
-    "recovery_input": "{\"schedule_mode\":\"tomorrow\",\"notify_summary\":false}",
-    "event_type": "Schedule"
+    "recovery_input": "{\"schedule_mode\":\"remaining_week\",\"notify_summary\":false}",
+    "event_type": "ScheduleV2"
   },
-  "dormitory_schedule": {"expression": "cron(0 23 ? * SUN *)"},
+  "dormitory_schedule": {"expressions": ["cron(0 8 ? * * *)", "cron(0 9 ? * * *)", "cron(0 10 ? * * *)"]},
   "state_machine": {
     "logical_resource": "DormitoryRetryStateMachine",
     "definition": "statemachine/menu-retry-workflow.asl.json",
@@ -52,6 +52,6 @@
     "invoke_payload": {"trigger": "step_functions", "execution_id.$": "$$.Execution.Id", "retry_count.$": "$$.State.RetryCount", "schedule_anchor.$": "$$.Execution.StartTime", "schedule_mode.$": "$.schedule_mode", "notify_summary.$": "$.notify_summary"},
     "failure_payload": {"trigger": "step_functions", "execution_id.$": "$$.Execution.Id", "restaurant": "${Restaurant}", "schedule_anchor.$": "$$.Execution.StartTime", "schedule_mode.$": "$.schedule_mode", "error_type.$": "$.error.Error"},
     "local_retry": {"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2.0},
-    "domain_retry": {"ErrorEquals": ["RetryableEmptyMenuError", "RetryableApiSendError", "RetryableMenuInterpretationError"], "IntervalSeconds": 7200, "MaxAttempts": 5, "BackoffRate": 1.0}
+    "domain_retry": {"ErrorEquals": ["RetryableEmptyMenuError", "RetryableApiSendError", "RetryableMenuInterpretationError"], "IntervalSeconds": 7200, "MaxAttempts": 9, "BackoffRate": 1.0}
   }
 }

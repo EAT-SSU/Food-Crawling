@@ -93,15 +93,15 @@ def test_state_machine_weekly_and_recovery_schedules_are_exact():
     for logical_id in schedule["state_machines"]:
         block = blocks[logical_id]
         assert block.count(f"Type: {schedule['event_type']}") == 2
-        assert f"Schedule: {schedule['expression']}" in block
+        assert f"ScheduleExpression: {schedule['expression']}" in block
+        assert block.count("ScheduleExpressionTimezone: Asia/Seoul") == 2
         assert schedule["weekly_input"] in block
         assert schedule["recovery_input"] in block
     assert "Type: Schedule" not in blocks["DormitorySchedulingFunction"]
-    assert (
-        f"Schedule: {CONTRACT['dormitory_schedule']['expression']}"
-        in blocks[CONTRACT["state_machine"]["logical_resource"]]
-    )
-    assert TEMPLATE.count("Type: Schedule") == 8
+    dormitory_block = blocks[CONTRACT["state_machine"]["logical_resource"]]
+    for expression in CONTRACT["dormitory_schedule"]["expressions"]:
+        assert f"ScheduleExpression: {expression}" in dormitory_block
+    assert TEMPLATE.count("Type: ScheduleV2") == 9
 
 
 def test_common_asl_payloads_substitutions_policies_and_retries_are_exact():
