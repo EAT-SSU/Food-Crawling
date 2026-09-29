@@ -96,6 +96,7 @@ Resources:
     Properties:
       CodeUri: ./
       Handler: functions.handler.lambda_handler
+      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
           OPERATION: schedule_dodam
@@ -107,6 +108,7 @@ Resources:
     Properties:
       CodeUri: ./
       Handler: functions.handler.lambda_handler
+      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
           OPERATION: schedule_haksik
@@ -118,6 +120,7 @@ Resources:
     Properties:
       CodeUri: ./
       Handler: functions.handler.lambda_handler
+      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
           OPERATION: schedule_faculty
@@ -129,6 +132,7 @@ Resources:
     Properties:
       CodeUri: ./
       Handler: functions.handler.lambda_handler
+      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
           OPERATION: schedule_dormitory
@@ -279,15 +283,17 @@ Resources:
             FunctionName: !Ref NotifyFailureFunction
       Events:
         WeeklySchedule:
-          Type: Schedule
+          Type: ScheduleV2
           Properties:
-            Schedule: cron(0 7 ? * SUN *)
+            ScheduleExpression: cron(0 16 ? * SUN *)
+            ScheduleExpressionTimezone: Asia/Seoul
             Input: '{"schedule_mode":"next_week","notify_summary":true}'
         RecoverySchedule:
-          Type: Schedule
+          Type: ScheduleV2
           Properties:
-            Schedule: cron(5 7 ? * MON-THU *)
-            Input: '{"schedule_mode":"tomorrow","notify_summary":false}'
+            ScheduleExpression: cron(5 16 ? * MON-THU *)
+            ScheduleExpressionTimezone: Asia/Seoul
+            Input: '{"schedule_mode":"remaining_week","notify_summary":false}'
 
   HaksikRetryStateMachine:
     Type: AWS::Serverless::StateMachine
@@ -304,15 +310,17 @@ Resources:
             FunctionName: !Ref NotifyFailureFunction
       Events:
         WeeklySchedule:
-          Type: Schedule
+          Type: ScheduleV2
           Properties:
-            Schedule: cron(0 7 ? * SUN *)
+            ScheduleExpression: cron(0 16 ? * SUN *)
+            ScheduleExpressionTimezone: Asia/Seoul
             Input: '{"schedule_mode":"next_week","notify_summary":true}'
         RecoverySchedule:
-          Type: Schedule
+          Type: ScheduleV2
           Properties:
-            Schedule: cron(5 7 ? * MON-THU *)
-            Input: '{"schedule_mode":"tomorrow","notify_summary":false}'
+            ScheduleExpression: cron(5 16 ? * MON-THU *)
+            ScheduleExpressionTimezone: Asia/Seoul
+            Input: '{"schedule_mode":"remaining_week","notify_summary":false}'
 
   FacultyRetryStateMachine:
     Type: AWS::Serverless::StateMachine
@@ -329,15 +337,17 @@ Resources:
             FunctionName: !Ref NotifyFailureFunction
       Events:
         WeeklySchedule:
-          Type: Schedule
+          Type: ScheduleV2
           Properties:
-            Schedule: cron(0 7 ? * SUN *)
+            ScheduleExpression: cron(0 16 ? * SUN *)
+            ScheduleExpressionTimezone: Asia/Seoul
             Input: '{"schedule_mode":"next_week","notify_summary":true}'
         RecoverySchedule:
-          Type: Schedule
+          Type: ScheduleV2
           Properties:
-            Schedule: cron(5 7 ? * MON-THU *)
-            Input: '{"schedule_mode":"tomorrow","notify_summary":false}'
+            ScheduleExpression: cron(5 16 ? * MON-THU *)
+            ScheduleExpressionTimezone: Asia/Seoul
+            Input: '{"schedule_mode":"remaining_week","notify_summary":false}'
 
   DormitoryRetryStateMachine:
     Type: AWS::Serverless::StateMachine
@@ -353,16 +363,24 @@ Resources:
         - LambdaInvokePolicy:
             FunctionName: !Ref NotifyFailureFunction
       Events:
-        WeeklySchedule:
-          Type: Schedule
+        MorningSchedule:
+          Type: ScheduleV2
           Properties:
-            Schedule: cron(0 23 ? * SUN *)
+            ScheduleExpression: cron(0 8 ? * * *)
+            ScheduleExpressionTimezone: Asia/Seoul
+            Input: '{"schedule_mode":"current_week","notify_summary":false}'
+        MidMorningSchedule:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 9 ? * * *)
+            ScheduleExpressionTimezone: Asia/Seoul
+            Input: '{"schedule_mode":"current_week","notify_summary":false}'
+        DeadlineSchedule:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 10 ? * * *)
+            ScheduleExpressionTimezone: Asia/Seoul
             Input: '{"schedule_mode":"current_week","notify_summary":true}'
-        RecoverySchedule:
-          Type: Schedule
-          Properties:
-            Schedule: cron(5 23 ? * MON-FRI *)
-            Input: '{"schedule_mode":"tomorrow","notify_summary":false}'
 
   DodamRetryStateMachineAlarm:
     Type: AWS::CloudWatch::Alarm

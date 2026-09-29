@@ -123,7 +123,7 @@ def test_all_schedules_run_through_per_restaurant_state_machines():
     template = _template_text()
     resources = _resource_blocks(template)
 
-    assert template.count("Type: Schedule") == 8
+    assert template.count("Type: ScheduleV2") == 9
     for function_id in DIRECT_SCHEDULE_FUNCTIONS:
         assert "Type: Schedule" not in resources[function_id]
 
@@ -135,8 +135,10 @@ def test_all_schedules_run_through_per_restaurant_state_machines():
         assert "DefinitionUri: statemachine/menu-retry-workflow.asl.json" in state_machine
         assert "NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn" in state_machine
         assert state_machine.count("LambdaInvokePolicy:") == 2
-        assert state_machine.count("Type: Schedule") == 2
-        assert "RecoverySchedule:" in state_machine
+        expected_schedule_count = 3 if restaurant == "Dormitory" else 2
+        assert state_machine.count("Type: ScheduleV2") == expected_schedule_count
+        expected_recovery = "DeadlineSchedule:" if restaurant == "Dormitory" else "RecoverySchedule:"
+        assert expected_recovery in state_machine
         assert resources[f"{restaurant}RetryStateMachineAlarm"].count("AWS::CloudWatch::Alarm") == 1
 
 
@@ -158,7 +160,7 @@ def test_preserves_common_retry_workflow():
     assert retries[1] == {
         "ErrorEquals": ["RetryableEmptyMenuError", "RetryableApiSendError", "RetryableMenuInterpretationError"],
         "IntervalSeconds": 7200,
-        "MaxAttempts": 5,
+        "MaxAttempts": 9,
         "BackoffRate": 1.0,
     }
     assert invoke["Catch"] == [
@@ -171,6 +173,25 @@ def test_preserves_common_retry_workflow():
     assert (
         notify_parameters["FunctionName"] == "${NotifyFailureFunctionArn}"
     )
+
+
+def test_schedules_use_seoul_timezone_and_scheduling_functions_are_serialized():
+    template = _template_text()
+    resources = _resource_blocks(template)
+
+    for function_id in (
+        "DodamSchedulingFunction",
+        "HaksikSchedulingFunction",
+        "FacultySchedulingFunction",
+        "DormitorySchedulingFunction",
+    ):
+        assert "ReservedConcurrentExecutions: 1" in resources[function_id]
+
+    assert template.count("ScheduleExpressionTimezone: Asia/Seoul") == 9
+    assert template.count("ScheduleExpression: cron(0 16 ? * SUN *)") == 3
+    assert template.count("ScheduleExpression: cron(5 16 ? * MON-THU *)") == 3
+    for hour in (8, 9, 10):
+        assert f"ScheduleExpression: cron(0 {hour} ? * * *)" in template
 
 
 def test_each_lambda_has_a_retained_30_day_log_group():

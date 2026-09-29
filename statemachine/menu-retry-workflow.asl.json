@@ -35,7 +35,7 @@
             "RetryableMenuInterpretationError"
           ],
           "IntervalSeconds": 7200,
-          "MaxAttempts": 5,
+          "MaxAttempts": 9,
           "BackoffRate": 1.0
         }
       ],

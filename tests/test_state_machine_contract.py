@@ -25,7 +25,7 @@ EXPECTED_RETRIES = [
             "RetryableMenuInterpretationError",
         ],
         "IntervalSeconds": 7200,
-        "MaxAttempts": 5,
+        "MaxAttempts": 9,
         "BackoffRate": 1.0,
     },
 ]
@@ -69,6 +69,9 @@ def test_eventbridge_inputs_use_internal_shape_instead_of_api_gateway_shape():
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
 
     assert template.count('"schedule_mode":"next_week"') == 3
-    assert template.count('"schedule_mode":"tomorrow"') == 4
+    assert template.count('"schedule_mode":"remaining_week"') == 3
+    assert '"schedule_mode":"tomorrow"' not in template
+    assert template.count("Type: ScheduleV2") == 9
+    assert template.count("ScheduleExpressionTimezone: Asia/Seoul") == 9
     assert '"httpMethod"' not in template
     assert '"queryStringParameters"' not in template
