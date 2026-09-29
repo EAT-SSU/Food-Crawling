@@ -51,6 +51,7 @@ def _client_session(response_text="", status=200):
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=None)
     response = _AsyncResponse(status=status, text=response_text)
+    session.get.return_value = response
     session.post.return_value = response
     return session
 
@@ -77,6 +78,9 @@ def test_unified_handler_integrates_real_wave2_modules_at_external_boundaries():
         "<td>제육볶음 Spicy Pork</td></tr></table>"
     )
     scraper_session = _ScraperSession(html)
+    existence_sessions = [
+        _client_session('{"isSuccess": true, "result": []}') for _ in range(2)
+    ]
     spring_session = _client_session('{"unmatchedMainMenus": []}')
     slack_session = _client_session()
     openai_client = MagicMock()
@@ -86,7 +90,12 @@ def test_unified_handler_integrates_real_wave2_modules_at_external_boundaries():
         patch("functions.menu_ai.AsyncOpenAI", return_value=openai_client),
         patch(
             "functions.clients.aiohttp.ClientSession",
-            side_effect=[scraper_session, spring_session, slack_session],
+            side_effect=[
+                scraper_session,
+                *existence_sessions,
+                spring_session,
+                slack_session,
+            ],
         ),
     ):
         response = handler.lambda_handler(
@@ -125,6 +134,9 @@ def test_accepted_spring_is_not_replayed_when_slack_retries_exhaust(monkeypatch)
         "<td>제육볶음 Spicy Pork</td></tr></table>"
     )
     scraper_session = _ScraperSession(html)
+    existence_sessions = [
+        _client_session('{"isSuccess": true, "result": []}') for _ in range(2)
+    ]
     spring_session = _client_session('{"unmatchedMainMenus": []}')
     slack_sessions = [_client_session("provider secret", status=500) for _ in range(3)]
     openai_client = MagicMock()
@@ -144,7 +156,12 @@ def test_accepted_spring_is_not_replayed_when_slack_retries_exhaust(monkeypatch)
             patch("functions.clients.send_slack_text", fast_slack),
             patch(
                 "functions.clients.aiohttp.ClientSession",
-                side_effect=[scraper_session, spring_session, *slack_sessions],
+                side_effect=[
+                    scraper_session,
+                    *existence_sessions,
+                    spring_session,
+                    *slack_sessions,
+                ],
             ),
         ):
             response = handler.lambda_handler(

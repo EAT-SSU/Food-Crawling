@@ -111,7 +111,7 @@ def parse_event(event: object) -> dict[str, Any]:
     payload = _mapping(event)
     query = _mapping(payload.get("queryStringParameters"))
     raw_trigger = payload.get("trigger")
-    delayed = payload.get("delayed_schedule", query.get("delayed_schedule"))
+    raw_delayed = payload.get("delayed_schedule", query.get("delayed_schedule"))
     execution_id = payload.get("execution_id")
     raw_schedule_mode = payload.get("schedule_mode", query.get("schedule_mode"))
     schedule_mode = (
@@ -119,18 +119,31 @@ def parse_event(event: object) -> dict[str, Any]:
         if isinstance(raw_schedule_mode, str) and raw_schedule_mode in _SCHEDULE_MODES
         else None
     )
-    if schedule_mode is None and _boolean(delayed):
+    retry_count = _retry_count(payload.get("retry_count", 0))
+    schedule_anchor = _schedule_anchor(payload.get("schedule_anchor"))
+    delayed = _boolean(raw_delayed)
+    if (
+        not delayed
+        and retry_count > 0
+        and schedule_mode == "next_week"
+        and schedule_anchor is not None
+    ):
+        anchor_date = datetime.fromisoformat(
+            schedule_anchor.replace("Z", "+00:00")
+        ).astimezone(ZoneInfo("Asia/Seoul")).date()
+        delayed = _now_seoul().date() > anchor_date
+    if delayed and schedule_mode in {None, "next_week"}:
         schedule_mode = "current_week"
     raw_notify_summary = payload.get(
         "notify_summary", query.get("notify_summary", True)
     )
     return {
         "trigger": raw_trigger if raw_trigger in _TRIGGERS else "direct",
-        "delayed_schedule": _boolean(delayed),
+        "delayed_schedule": delayed,
         "execution_id": execution_id
         if isinstance(execution_id, str) and execution_id
         else None,
-        "retry_count": _retry_count(payload.get("retry_count", 0)),
+        "retry_count": retry_count,
         "target_date": _date(
             payload.get("target_date") or payload.get("date") or query.get("date")
         ),
@@ -138,7 +151,7 @@ def parse_event(event: object) -> dict[str, Any]:
         "notify_summary": (
             raw_notify_summary if isinstance(raw_notify_summary, bool) else True
         ),
-        "schedule_anchor": _schedule_anchor(payload.get("schedule_anchor")),
+        "schedule_anchor": schedule_anchor,
     }
 
 
@@ -238,6 +251,19 @@ async def meal_exists(
     )
 
 
+async def publish_if_missing(
+    config: Mapping[str, Any], payload: Mapping[str, Any], environment: str
+) -> Any | None:
+    if await meal_exists(
+        config,
+        str(payload["time"]),
+        environment,
+        target_date=str(payload["date"]),
+    ):
+        return None
+    return await publish_menu(config, payload, environment)
+
+
 async def notify_slack(config: Mapping[str, Any], notification: Mapping[str, Any]) -> Any:
     """Lazy patch boundary; final failure reaches only this client function."""
     module = importlib.import_module("functions.clients")
@@ -271,6 +297,8 @@ def _now_seoul() -> datetime:
 
 
 def _request_now(request: Mapping[str, Any]) -> datetime:
+    if request.get("delayed_schedule") is True:
+        return _now_seoul()
     anchor = request.get("schedule_anchor")
     if isinstance(anchor, str):
         return datetime.fromisoformat(anchor.replace("Z", "+00:00")).astimezone(
@@ -501,6 +529,19 @@ async def _process_source_date(
             )
             continue
         time_slot, price = policy
+        if not scheduled:
+            for environment in environments:
+                publication_key = (meal_date, time_slot, environment)
+                try:
+                    if await meal_exists(
+                        config,
+                        time_slot,
+                        environment,
+                        target_date=meal_date,
+                    ):
+                        present.add(publication_key)
+                except Exception:
+                    blocked.add(publication_key)
         if all(
             (meal_date, time_slot, environment) in present
             for environment in environments
@@ -578,10 +619,25 @@ async def _process_source_date(
 
         for environment in environments:
             publication_key = (meal_date, time_slot, environment)
-            if publication_key in present or publication_key in blocked:
+            if publication_key in present:
+                continue
+            if publication_key in blocked:
+                summary["warnings"].append(
+                    {
+                        "slot": source_slot,
+                        "stage": "publication",
+                        "environment": environment,
+                        "reason": "existence check failed",
+                        "error_type": "SpringExistenceError",
+                    }
+                )
+                if environment == critical_environment:
+                    critical_failures.add(meal_date)
                 continue
             try:
-                publication = await publish_menu(config, payload, environment)
+                publication = await publish_if_missing(
+                    config, payload, environment
+                )
             except (
                 RetryableEmptyMenuError,
                 RetryableApiSendError,
@@ -604,6 +660,8 @@ async def _process_source_date(
                 continue
 
             present.add(publication_key)
+            if publication is None:
+                continue
 
             unmatched = _result_value(publication, "unmatchedMainMenus", None)
             if unmatched is None:
@@ -787,33 +845,50 @@ async def _run_schedule(
         )
     ]
     results: list[dict[str, Any]] = []
-    if config["restaurant"] == "DORMITORY" and dates_to_scrape:
-        results.extend(
-            await _process_source_date(
-                config,
-                dates_to_scrape[0],
-                scheduled=True,
-                requested_dates=dates_to_scrape,
-                notify_summary=False,
-                retry_failures=False,
-                known_present=known_present,
-                blocked_publications=blocked_publications,
-                expected_empty=expected_empty,
-            )
-        )
-    else:
-        for target_date in dates_to_scrape:
+    for target_date in dates_to_scrape:
+        try:
             results.extend(
                 await _process_source_date(
                     config,
                     target_date,
                     scheduled=True,
+                    requested_dates=(
+                        [target_date]
+                        if config["restaurant"] == "DORMITORY"
+                        else None
+                    ),
                     notify_summary=False,
                     retry_failures=False,
                     known_present=known_present,
                     blocked_publications=blocked_publications,
                     expected_empty=expected_empty,
                 )
+            )
+        except (
+            RetryableEmptyMenuError,
+            RetryableApiSendError,
+            RetryableMenuInterpretationError,
+        ):
+            raise
+        except Exception as error:
+            if getattr(error, "outcome", None) != "API_FAILURE":
+                raise
+            results.append(
+                {
+                    "date": target_date,
+                    "restaurant": config["name_ko"],
+                    "menus": {},
+                    "success": False,
+                    "error_slots": {"전체": "SOURCE_HTTP_ERROR"},
+                    "error_reasons": ["SOURCE_HTTP_ERROR"],
+                    "warnings": [
+                        {
+                            "slot": "전체",
+                            "stage": "source",
+                            "error_type": type(error).__name__,
+                        }
+                    ],
+                }
             )
 
     remaining_missing: list[dict[str, Any]] = []
@@ -855,7 +930,11 @@ async def _run_schedule(
         return _response(200, body)
 
     if config["restaurant"] == "DORMITORY":
-        if request["notify_summary"]:
+        today = _now_seoul().strftime("%Y%m%d")
+        today_missing = [
+            item for item in remaining_missing if item["date"] == today
+        ]
+        if request["notify_summary"] and today_missing:
             await notify_slack(
                 config,
                 {
@@ -863,9 +942,12 @@ async def _run_schedule(
                     "date": dates[0],
                     "restaurant": config["name_ko"],
                     "completeness": completeness,
-                    "remaining_missing": remaining_missing,
+                    "remaining_missing": today_missing,
                 },
             )
+        return _response(200, body)
+
+    if request["schedule_mode"] != "next_week":
         return _response(200, body)
 
     if request["retry_count"] >= 9:
