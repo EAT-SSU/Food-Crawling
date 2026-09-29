@@ -12,10 +12,15 @@ EXPECTED_RETRIES = [
             "Lambda.ServiceException",
             "Lambda.AWSLambdaException",
             "Lambda.SdkClientException",
-            "Lambda.TooManyRequestsException",
         ],
         "IntervalSeconds": 2,
         "MaxAttempts": 3,
+        "BackoffRate": 2.0,
+    },
+    {
+        "ErrorEquals": ["Lambda.TooManyRequestsException"],
+        "IntervalSeconds": 30,
+        "MaxAttempts": 5,
         "BackoffRate": 2.0,
     },
     {
@@ -36,8 +41,24 @@ def _workflow():
 
 
 def test_common_invoke_payload_has_correlation_and_schedule_controls():
-    invoke = _workflow()["States"]["InvokeSchedule"]
+    workflow = _workflow()
+    states = workflow["States"]
+    invoke = states["InvokeSchedule"]
 
+    assert workflow["StartAt"] == "PrepareInput"
+    assert states["PrepareInput"]["Parameters"] == {
+        "defaults": {
+            "schedule_mode": None,
+            "target_date": None,
+            "delayed_schedule": False,
+            "notify_summary": True,
+        },
+        "input.$": "$",
+    }
+    assert states["MergeInput"]["Parameters"] == {
+        "merged.$": "States.JsonMerge($.defaults, $.input, false)"
+    }
+    assert states["MergeInput"]["OutputPath"] == "$.merged"
     assert invoke["Retry"] == EXPECTED_RETRIES
     assert invoke["Parameters"]["Payload"] == {
         "trigger": "step_functions",
@@ -45,6 +66,8 @@ def test_common_invoke_payload_has_correlation_and_schedule_controls():
         "retry_count.$": "$$.State.RetryCount",
         "schedule_anchor.$": "$$.Execution.StartTime",
         "schedule_mode.$": "$.schedule_mode",
+        "target_date.$": "$.target_date",
+        "delayed_schedule.$": "$.delayed_schedule",
         "notify_summary.$": "$.notify_summary",
     }
 
@@ -59,6 +82,8 @@ def test_final_notifier_payload_is_allowlisted_and_never_forwards_cause_or_state
         "restaurant": "${Restaurant}",
         "schedule_anchor.$": "$$.Execution.StartTime",
         "schedule_mode.$": "$.schedule_mode",
+        "target_date.$": "$.target_date",
+        "delayed_schedule.$": "$.delayed_schedule",
         "error_type.$": "$.error.Error",
     }
     assert "Payload.$" not in notify
