@@ -947,7 +947,7 @@ async def _run_schedule(
             )
         return _response(200, body)
 
-    if request["schedule_mode"] != "next_week":
+    if request["trigger"] != "step_functions":
         return _response(200, body)
 
     if request["retry_count"] >= 9:

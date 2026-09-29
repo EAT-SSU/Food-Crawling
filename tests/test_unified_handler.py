@@ -732,6 +732,7 @@ def test_scheduled_menu_validation_failure_is_retryable_for_any_restaurant():
             handler.lambda_handler(
                 {
                     "operation": "schedule_haksik",
+                    "trigger": "step_functions",
                     "target_date": "20260918",
                     "schedule_mode": "next_week",
                 },
@@ -769,6 +770,7 @@ def test_scheduled_provider_failure_is_retryable_for_step_functions():
             handler.lambda_handler(
                 {
                     "operation": "schedule_haksik",
+                    "trigger": "step_functions",
                     "target_date": "20260918",
                     "schedule_mode": "next_week",
                 },
@@ -817,6 +819,7 @@ def test_scheduled_empty_failure_uses_actual_restaurant_name():
             handler.lambda_handler(
                 {
                     "operation": "schedule_haksik",
+                    "trigger": "step_functions",
                     "target_date": "20260918",
                     "schedule_mode": "next_week",
                 },
@@ -845,6 +848,7 @@ def test_scheduled_api_failure_uses_actual_restaurant_name():
             handler.lambda_handler(
                 {
                     "operation": "schedule_haksik",
+                    "trigger": "step_functions",
                     "target_date": "20260918",
                     "schedule_mode": "next_week",
                 },
@@ -1020,6 +1024,7 @@ def test_one_date_publication_failure_does_not_block_later_dates():
             handler.lambda_handler(
                 {
                     "operation": "schedule_faculty",
+                    "trigger": "step_functions",
                     "schedule_mode": "next_week",
                     "notify_summary": False,
                 },
@@ -1028,6 +1033,7 @@ def test_one_date_publication_failure_does_not_block_later_dates():
         retry = handler.lambda_handler(
             {
                 "operation": "schedule_faculty",
+                "trigger": "step_functions",
                 "schedule_mode": "next_week",
                 "notify_summary": False,
             },
@@ -1049,6 +1055,7 @@ def test_general_restaurant_alerts_only_when_retry_cap_is_exhausted(
         return handler.lambda_handler(
             {
                 "operation": "schedule_faculty",
+                "trigger": "step_functions",
                 "target_date": "20260929",
                 "retry_count": retry_count,
                 "schedule_mode": "next_week",
@@ -1275,3 +1282,28 @@ def test_next_week_retry_crossing_midnight_sets_delayed_schedule_and_same_week()
     assert request["delayed_schedule"] is True
     assert request["schedule_mode"] == "current_week"
     assert dates == ["20260921", "20260922", "20260923", "20260924", "20260925"]
+
+
+def test_step_functions_retry_after_midnight_keeps_retrying_original_week():
+    monday = datetime(2026, 9, 21, 0, 5, tzinfo=ZoneInfo("Asia/Seoul"))
+    with (
+        patch.object(handler, "_now_seoul", return_value=monday),
+        patch.object(handler, "meal_exists", AsyncMock(return_value=False)),
+        patch.object(handler, "scrape", AsyncMock(return_value=[])),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        with pytest.raises(handler.RetryableEmptyMenuError) as raised:
+            handler.lambda_handler(
+                {
+                    "operation": "schedule_haksik",
+                    "trigger": "step_functions",
+                    "schedule_mode": "next_week",
+                    "schedule_anchor": "2026-09-20T07:00:00Z",
+                    "retry_count": 4,
+                    "delayed_schedule": True,
+                    "notify_summary": True,
+                },
+                _Context(),
+            )
+
+    assert raised.value.target_date == "20260921"
