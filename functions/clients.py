@@ -281,6 +281,30 @@ def format_slack_text(notification: Mapping[str, object]) -> str:
         error_type = raw_error_type if isinstance(raw_error_type, str) else "UnknownError"
         reason = allowed_errors.get(error_type, "알 수 없는 처리 오류")
         return f"{header}\n⚠️ 최종 처리 실패: {reason}"
+    if notification_type == "weekly_completeness":
+        completeness = notification.get("completeness")
+        values = completeness if isinstance(completeness, Mapping) else {}
+
+        def safe_count(name: str) -> int:
+            value = values.get(name)
+            return (
+                value
+                if isinstance(value, int)
+                and not isinstance(value, bool)
+                and value >= 0
+                else 0
+            )
+
+        secured = safe_count("secured")
+        total = safe_count("total")
+        expected_empty = safe_count("expected_empty")
+        missing = notification.get("remaining_missing")
+        missing_count = len(missing) if isinstance(missing, list) else 0
+        return (
+            f"{header}\n"
+            f"⚠️ 주간 메뉴 확보: {secured}/{total}개 (미운영 {expected_empty}개)\n"
+            f"⚠️ 마감 시점 미확보: {missing_count}개"
+        )
     menus = notification.get("menus")
     main_menus = notification.get("main_menus")
     empty_reasons = notification.get("empty_reasons")
