@@ -181,7 +181,7 @@ def test_preserves_common_retry_workflow():
     )
 
 
-def test_schedules_use_seoul_timezone_and_scheduling_functions_are_serialized():
+def test_schedules_use_seoul_timezone_without_reserved_concurrency():
     template = _template_text()
     resources = _resource_blocks(template)
 
@@ -191,7 +191,7 @@ def test_schedules_use_seoul_timezone_and_scheduling_functions_are_serialized():
         "FacultySchedulingFunction",
         "DormitorySchedulingFunction",
     ):
-        assert "ReservedConcurrentExecutions: 1" in resources[function_id]
+        assert "ReservedConcurrentExecutions" not in resources[function_id]
 
     assert template.count("ScheduleExpressionTimezone: Asia/Seoul") == 9
     assert template.count("ScheduleExpression: cron(0 16 ? * SUN *)") == 3

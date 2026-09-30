@@ -96,7 +96,6 @@ Resources:
     Properties:
       CodeUri: ./
       Handler: functions.handler.lambda_handler
-      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
           OPERATION: schedule_dodam
@@ -115,7 +114,6 @@ Resources:
     Properties:
       CodeUri: ./
       Handler: functions.handler.lambda_handler
-      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
           OPERATION: schedule_haksik
@@ -134,7 +132,6 @@ Resources:
     Properties:
       CodeUri: ./
       Handler: functions.handler.lambda_handler
-      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
           OPERATION: schedule_faculty
@@ -153,7 +150,6 @@ Resources:
     Properties:
       CodeUri: ./
       Handler: functions.handler.lambda_handler
-      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
           OPERATION: schedule_dormitory
@@ -322,7 +318,7 @@ Resources:
         - LambdaInvokePolicy:
             FunctionName: !Ref NotifyFailureFunction
       Events:
-        WeeklySchedule:
+        WeeklySeoulSchedule:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(0 16 ? * SUN *)
@@ -343,7 +339,7 @@ Resources:
         - LambdaInvokePolicy:
             FunctionName: !Ref NotifyFailureFunction
       Events:
-        WeeklySchedule:
+        WeeklySeoulSchedule:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(0 16 ? * SUN *)
@@ -364,7 +360,7 @@ Resources:
         - LambdaInvokePolicy:
             FunctionName: !Ref NotifyFailureFunction
       Events:
-        WeeklySchedule:
+        WeeklySeoulSchedule:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(0 16 ? * SUN *)
