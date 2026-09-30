@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import aiohttp
@@ -511,11 +511,13 @@ async def fetch_meals(
         async with make_session() as session:
             if name == "DORMITORY":
                 date_value = datetime.strptime(date, "%Y%m%d")
+                # The source returns the following week when gday is a Sunday.
+                week_monday = date_value - timedelta(days=date_value.weekday())
                 params = {
                     "viewform": "B0001_foodboard_list",
-                    "gyear": date_value.year,
-                    "gmonth": date_value.month,
-                    "gday": date_value.day,
+                    "gyear": week_monday.year,
+                    "gmonth": week_monday.month,
+                    "gday": week_monday.day,
                 }
                 request = session.get(dormitory_base_url, params=params)
             else:

@@ -341,6 +341,28 @@ async def test_fetch_meals_preserves_source_url_and_date_formats():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("requested", ["20260719", "20260716"])
+async def test_dormitory_requests_week_monday_for_any_weekday(requested):
+    dorm_html = (FIXTURES / "dormitory.html").read_text(encoding="utf-8")
+    session = _Session(_Response(dorm_html))
+
+    await fetch_meals(
+        "DORMITORY",
+        requested,
+        requested_dates=[requested],
+        session_factory=lambda: session,
+        dormitory_base_url="https://source.example/dormitory",
+    )
+
+    assert session.calls[0][1]["params"] == {
+        "viewform": "B0001_foodboard_list",
+        "gyear": 2026,
+        "gmonth": 7,
+        "gday": 13,
+    }
+
+
+@pytest.mark.asyncio
 async def test_fetch_failure_uses_one_attempt_and_preserves_error_classification():
     failure = TimeoutError("provider detail")
     session = _Session(_Response(error=failure))

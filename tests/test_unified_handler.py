@@ -23,6 +23,12 @@ class _Context:
     aws_request_id = "unified-handler-request"
 
 
+@pytest.fixture(autouse=True)
+def _mock_spring_existence():
+    with patch.object(handler, "meal_exists", AsyncMock(return_value=False)):
+        yield
+
+
 def _raw(date: str, restaurant: str) -> dict[str, str]:
     slot = "석식1" if restaurant == "HAKSIK" else "중식1"
     return {
@@ -31,6 +37,15 @@ def _raw(date: str, restaurant: str) -> dict[str, str]:
         "source_slot": slot,
         "raw_text": "제육볶음 Pork",
     }
+
+
+def _raw_slot(date: str, restaurant: str, slot: str) -> dict[str, str]:
+    return {**_raw(date, restaurant), "source_slot": slot}
+
+
+def _complete_raw(date: str, restaurant: str) -> list[dict[str, str]]:
+    slots = ("중식1",) if restaurant == "FACULTY" else ("중식1", "석식1")
+    return [_raw_slot(date, restaurant, slot) for slot in slots]
 
 
 def _accepted(unmatched=None, warnings=None):
@@ -45,10 +60,12 @@ def _dependencies(entry):
     restaurant = entry["restaurant"]
     dates = entry.get("result_dates", entry.get("current_dates", [entry.get("expected_date", "20260713")]))
     if restaurant == "DORMITORY":
-        scrape = AsyncMock(return_value=[_raw(date, restaurant) for date in dates])
+        scrape = AsyncMock(
+            return_value=[record for date in dates for record in _complete_raw(date, restaurant)]
+        )
     else:
         scrape = AsyncMock(
-            side_effect=lambda _config, target_date: [_raw(target_date, restaurant)]
+            side_effect=lambda _config, target_date: _complete_raw(target_date, restaurant)
         )
     interpret = AsyncMock(
         return_value={
@@ -93,7 +110,8 @@ def test_all_scrape_and_schedule_operations_share_one_dispatch_boundary(entry):
     assert response["statusCode"] == entry["expected_status"]
     assert response["headers"] == {"Content-Type": "application/json; charset=utf-8"}
     assert run_count == 1
-    assert slack.await_count == entry["expected_slack_count"]
+    expected_slack_count = entry["expected_slack_count"] if entry["kind"] == "scrape" else 0
+    assert slack.await_count == expected_slack_count
     expected_environments = entry["destination_environments"]
     actual_environments = [call.args[2] for call in publish.await_args_list]
     assert set(actual_environments) == set(expected_environments)
@@ -163,9 +181,16 @@ def test_dormitory_retry_exceptions_escape_by_identity_without_slack(retry_type)
 
 
 def test_dormitory_critical_publication_failure_becomes_retry_without_slack():
-    scrape = AsyncMock(return_value=[_raw("20260713", "DORMITORY")])
+    scrape = AsyncMock(return_value=_complete_raw("20260713", "DORMITORY"))
     interpret = AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []})
-    publish = AsyncMock(side_effect=[_accepted(), RuntimeError("prod unavailable")])
+    publish = AsyncMock(
+        side_effect=[
+            _accepted(),
+            RuntimeError("prod unavailable"),
+            _accepted(),
+            _accepted(),
+        ]
+    )
     slack = AsyncMock()
 
     with (
@@ -174,14 +199,18 @@ def test_dormitory_critical_publication_failure_becomes_retry_without_slack():
         patch.object(handler, "publish_menu", publish),
         patch.object(handler, "notify_slack", slack),
     ):
-        with pytest.raises(handler.RetryableApiSendError) as raised:
-            handler.lambda_handler(
-                {"operation": "schedule_dormitory", "target_date": "20260713"},
-                _Context(),
-            )
+        response = handler.lambda_handler(
+            {
+                "operation": "schedule_dormitory",
+                "target_date": "20260713",
+                "notify_summary": False,
+            },
+            _Context(),
+        )
 
-    assert raised.value.target_date == "20260713"
-    assert raised.value.failed_days == 1
+    assert json.loads(response["body"])["remaining_missing"] == [
+        {"date": "20260713", "time": "LUNCH", "environments": ["prod"]}
+    ]
     slack.assert_not_awaited()
 
 
@@ -448,7 +477,11 @@ def test_empty_source_records_bypass_gpt_and_use_safe_summary():
 def test_partial_dormitory_week_isolates_missing_date_and_processes_others():
     dates = [f"202607{day:02d}" for day in range(13, 20)]
     scrape = AsyncMock(
-        return_value=[_raw(date, "DORMITORY") for date in dates if date != dates[2]]
+        side_effect=lambda _config, target_date, **_kwargs: (
+            []
+            if target_date == dates[2]
+            else _complete_raw(target_date, "DORMITORY")
+        )
     )
     interpret = AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []})
     publish = AsyncMock(return_value=_accepted())
@@ -463,14 +496,16 @@ def test_partial_dormitory_week_isolates_missing_date_and_processes_others():
     ):
         response = handler.lambda_handler({"operation": "schedule_dormitory"}, _Context())
 
-    results = json.loads(response["body"])
+    body = json.loads(response["body"])
+    results = body["results"]
     missing = next(result for result in results if result["date"] == dates[2])
     assert response["statusCode"] == 200
     assert missing["success"] is False
     assert missing["error_slots"] == {"전체": "MISSING_DATE"}
-    assert interpret.await_count == 6
-    assert publish.await_count == 12
-    assert slack.await_count == 7
+    assert interpret.await_count == 12
+    assert publish.await_count == 24
+    slack.assert_not_awaited()
+    assert {item["date"] for item in body["remaining_missing"]} == {dates[2]}
 
 
 def test_weekly_dormitory_failure_is_isolated_to_its_date():
@@ -484,7 +519,13 @@ def test_weekly_dormitory_failure_is_isolated_to_its_date():
         "outcome": "AMBIGUOUS_EMPTY",
         "reason_code": "EMPTY_CELL",
     }
-    scrape = AsyncMock(return_value=[_raw(dates[0], "DORMITORY"), failed_record])
+    scrape = AsyncMock(
+        side_effect=lambda _config, target_date, **_kwargs: (
+            _complete_raw(target_date, "DORMITORY")
+            if target_date == dates[0]
+            else [failed_record]
+        )
+    )
     slack = AsyncMock()
 
     with (
@@ -503,11 +544,11 @@ def test_weekly_dormitory_failure_is_isolated_to_its_date():
             _Context(),
         )
 
-    results = json.loads(response["body"])
+    results = json.loads(response["body"])["results"]
     assert response["statusCode"] == 200
     assert [result["success"] for result in results] == [True, False]
     assert results[1]["error_slots"] == {"중식": "EMPTY_CELL"}
-    assert slack.await_count == 2
+    slack.assert_not_awaited()
 
 
 def test_complete_dormitory_week_including_closed_date_keeps_current_behavior():
@@ -515,14 +556,18 @@ def test_complete_dormitory_week_including_closed_date_keeps_current_behavior():
     closed_record = {
         "date": dates[-1],
         "restaurant": "DORMITORY",
-        "source_slot": "중식1",
+        "source_slot": "전체",
         "raw_text": "미운영",
         "source_english": (),
         "outcome": "EXPECTED_EMPTY",
         "reason_code": "CLOSED_MARKER",
     }
     scrape = AsyncMock(
-        return_value=[_raw(date, "DORMITORY") for date in dates[:-1]] + [closed_record]
+        side_effect=lambda _config, target_date, **_kwargs: (
+            [closed_record]
+            if target_date == dates[-1]
+            else _complete_raw(target_date, "DORMITORY")
+        )
     )
     interpret = AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []})
     publish = AsyncMock(return_value=_accepted())
@@ -536,16 +581,12 @@ def test_complete_dormitory_week_including_closed_date_keeps_current_behavior():
     ):
         response = handler.lambda_handler({"operation": "schedule_dormitory"}, _Context())
 
-    scrape.assert_awaited_once_with(
-        handler.load_operation_config("schedule_dormitory"),
-        dates[0],
-        requested_dates=dates,
-    )
+    assert scrape.await_count == 7
+    assert all(call.kwargs["requested_dates"] == [call.args[1]] for call in scrape.await_args_list)
     assert response["statusCode"] == 200
-    assert interpret.await_count == 6
-    assert publish.await_count == 12
-    assert slack.await_count == 7
-    assert {call.args[1]["restaurant"] for call in slack.await_args_list} == {"기숙사식당"}
+    assert interpret.await_count == 12
+    assert publish.await_count == 24
+    slack.assert_not_awaited()
 
 
 def test_dormitory_closed_weekend_is_complete_without_ai_or_spring_calls():
@@ -562,8 +603,13 @@ def test_dormitory_closed_weekend_is_complete_without_ai_or_spring_calls():
         }
         for date in dates[-2:]
     ]
+    closed_by_date = {record["date"]: record for record in closed_records}
     scrape = AsyncMock(
-        return_value=[_raw(date, "DORMITORY") for date in dates[:5]] + closed_records
+        side_effect=lambda _config, target_date, **_kwargs: (
+            [closed_by_date[target_date]]
+            if target_date in closed_by_date
+            else _complete_raw(target_date, "DORMITORY")
+        )
     )
     interpret = AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []})
     publish = AsyncMock(return_value=_accepted())
@@ -579,15 +625,9 @@ def test_dormitory_closed_weekend_is_complete_without_ai_or_spring_calls():
         response = handler.lambda_handler({"operation": "schedule_dormitory"}, _Context())
 
     assert response["statusCode"] == 200
-    assert interpret.await_count == 5
-    assert publish.await_count == 10
-    assert slack.await_count == 7
-    weekend_notifications = [call.args[1] for call in slack.await_args_list[-2:]]
-    assert all(item["menus"] == {"전체": []} for item in weekend_notifications)
-    assert all(
-        item["empty_reasons"] == {"전체": "WEEKEND_CLOSED"}
-        for item in weekend_notifications
-    )
+    assert interpret.await_count == 10
+    assert publish.await_count == 20
+    slack.assert_not_awaited()
 
 
 def test_direct_dormitory_fetches_seven_dates_once_and_aggregates_weekly_response():
@@ -620,7 +660,8 @@ def test_direct_dormitory_fetches_seven_dates_once_and_aggregates_weekly_respons
 
 
 def test_parse_event_allowlists_schedule_mode_and_defaults_notify_summary_true():
-    assert handler.parse_event({"schedule_mode": "tomorrow"})["schedule_mode"] == "tomorrow"
+    assert handler.parse_event({"schedule_mode": "remaining_week"})["schedule_mode"] == "remaining_week"
+    assert handler.parse_event({"schedule_mode": "tomorrow"})["schedule_mode"] is None
     assert handler.parse_event({"schedule_mode": "unsafe"})["schedule_mode"] is None
     assert handler.parse_event({"schedule_mode": ["tomorrow"]})["schedule_mode"] is None
     assert handler.parse_event({})["notify_summary"] is True
@@ -628,14 +669,14 @@ def test_parse_event_allowlists_schedule_mode_and_defaults_notify_summary_true()
     assert handler.parse_event({"notify_summary": "unsafe"})["notify_summary"] is True
 
 
-def test_tomorrow_schedule_uses_asia_seoul_date():
+def test_remaining_week_schedule_uses_asia_seoul_date_through_restaurant_week_end():
     config = handler.load_operation_config("schedule_haksik")
     assert config is not None
-    request = handler.parse_event({"schedule_mode": "tomorrow"})
-    fixed_now = datetime(2026, 9, 17, 23, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+    request = handler.parse_event({"schedule_mode": "remaining_week"})
+    fixed_now = datetime(2026, 9, 17, 16, 5, tzinfo=ZoneInfo("Asia/Seoul"))
 
     with patch.object(handler, "_now_seoul", return_value=fixed_now):
-        assert handler._dates_for(config, request) == ["20260918"]
+        assert handler._dates_for(config, request) == ["20260917", "20260918"]
 
 
 def test_schedule_anchor_keeps_next_week_stable_after_retry_crosses_monday():
@@ -654,7 +695,7 @@ def test_schedule_anchor_keeps_next_week_stable_after_retry_crosses_monday():
 
 
 def test_quiet_schedule_suppresses_only_date_summary_slack():
-    scrape = AsyncMock(return_value=[_raw("20260918", "HAKSIK")])
+    scrape = AsyncMock(return_value=_complete_raw("20260918", "HAKSIK"))
     slack = AsyncMock()
     with (
         patch.object(handler, "scrape", scrape),
@@ -689,7 +730,12 @@ def test_scheduled_menu_validation_failure_is_retryable_for_any_restaurant():
     ):
         with pytest.raises(handler.RetryableMenuInterpretationError) as raised:
             handler.lambda_handler(
-                {"operation": "schedule_haksik", "target_date": "20260918"},
+                {
+                    "operation": "schedule_haksik",
+                    "trigger": "step_functions",
+                    "target_date": "20260918",
+                    "schedule_mode": "next_week",
+                },
                 _Context(),
             )
 
@@ -722,7 +768,12 @@ def test_scheduled_provider_failure_is_retryable_for_step_functions():
     ):
         with pytest.raises(handler.RetryableMenuInterpretationError) as raised:
             handler.lambda_handler(
-                {"operation": "schedule_haksik", "target_date": "20260918"},
+                {
+                    "operation": "schedule_haksik",
+                    "trigger": "step_functions",
+                    "target_date": "20260918",
+                    "schedule_mode": "next_week",
+                },
                 _Context(),
             )
 
@@ -766,7 +817,12 @@ def test_scheduled_empty_failure_uses_actual_restaurant_name():
     ):
         with pytest.raises(handler.RetryableEmptyMenuError) as raised:
             handler.lambda_handler(
-                {"operation": "schedule_haksik", "target_date": "20260918"},
+                {
+                    "operation": "schedule_haksik",
+                    "trigger": "step_functions",
+                    "target_date": "20260918",
+                    "schedule_mode": "next_week",
+                },
                 _Context(),
             )
 
@@ -790,7 +846,12 @@ def test_scheduled_api_failure_uses_actual_restaurant_name():
     ):
         with pytest.raises(handler.RetryableApiSendError) as raised:
             handler.lambda_handler(
-                {"operation": "schedule_haksik", "target_date": "20260918"},
+                {
+                    "operation": "schedule_haksik",
+                    "trigger": "step_functions",
+                    "target_date": "20260918",
+                    "schedule_mode": "next_week",
+                },
                 _Context(),
             )
 
@@ -811,3 +872,438 @@ def test_notify_summary_false_does_not_suppress_final_failure_slack():
         )
 
     slack.assert_awaited_once()
+
+
+def test_already_present_slot_skips_scrape_interpretation_and_post():
+    exists = AsyncMock(return_value=True)
+    scrape = AsyncMock()
+    interpret = AsyncMock()
+    publish = AsyncMock()
+
+    with (
+        patch.object(handler, "meal_exists", exists),
+        patch.object(handler, "scrape", scrape),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        response = handler.lambda_handler(
+            {"operation": "schedule_faculty", "target_date": "20260929"},
+            _Context(),
+        )
+
+    assert response["statusCode"] == 200
+    scrape.assert_not_awaited()
+    interpret.assert_not_awaited()
+    publish.assert_not_awaited()
+    assert {call.args[2] for call in exists.await_args_list} == {"dev", "prod"}
+
+
+def test_haksik_existence_check_uses_configured_morning_time_for_dinner_slot():
+    exists = AsyncMock(return_value=True)
+
+    with (
+        patch.object(handler, "meal_exists", exists),
+        patch.object(handler, "scrape", AsyncMock()),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        handler.lambda_handler(
+            {"operation": "schedule_haksik", "target_date": "20260929"},
+            _Context(),
+        )
+
+    checked_times = {call.args[1] for call in exists.await_args_list}
+    assert checked_times == {"LUNCH", "MORNING"}
+
+
+def test_929_incident_reconciles_only_monday_at_0800_then_fills_rest_at_0900():
+    dates = ["20260928", "20260929", "20260930", "20261001", "20261002", "20261003", "20261004"]
+    monday_records = [
+        _raw_slot(dates[0], "DORMITORY", "중식"),
+        _raw_slot(dates[0], "DORMITORY", "석식"),
+    ]
+    full_week_records = [
+        _raw_slot(date, "DORMITORY", slot)
+        for date in dates
+        for slot in ("중식", "석식")
+    ]
+    records_by_date = {
+        date: [record for record in full_week_records if record["date"] == date]
+        for date in dates
+    }
+
+    async def scrape_date(_config, target_date, **_kwargs):
+        if run == 0 and target_date != dates[0]:
+            return []
+        return records_by_date[target_date]
+
+    scrape = AsyncMock(side_effect=scrape_date)
+    interpret = AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []})
+    publish = AsyncMock(return_value=_accepted())
+    slack = AsyncMock()
+    run = 0
+
+    async def existence(_config, _time, _environment, *, target_date):
+        return run == 1 and target_date == dates[0]
+
+    with (
+        patch.object(handler, "_week_dates", return_value=dates),
+        patch.object(handler, "meal_exists", AsyncMock(side_effect=existence)),
+        patch.object(handler, "scrape", scrape),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        first = handler.lambda_handler(
+            {
+                "operation": "schedule_dormitory",
+                "schedule_mode": "current_week",
+                "notify_summary": False,
+            },
+            _Context(),
+        )
+        run = 1
+        second = handler.lambda_handler(
+            {
+                "operation": "schedule_dormitory",
+                "schedule_mode": "current_week",
+                "notify_summary": False,
+            },
+            _Context(),
+        )
+
+    assert first["statusCode"] == second["statusCode"] == 200
+    assert scrape.await_count == 13
+    assert all(call.kwargs["requested_dates"] == [call.args[1]] for call in scrape.await_args_list)
+    assert publish.await_count == 28
+    assert interpret.await_count == 14
+    slack.assert_not_awaited()
+    assert json.loads(second["body"])["remaining_missing"] == []
+    assert json.loads(second["body"])["completeness"] == {
+        "secured": 14,
+        "total": 14,
+        "expected_empty": 0,
+    }
+
+
+def test_one_date_publication_failure_does_not_block_later_dates():
+    dates = ["20260928", "20260929"]
+    present: set[tuple[str, str]] = set()
+    failed_once = False
+    scrape = AsyncMock(
+        side_effect=lambda _config, target_date: [_raw(target_date, "FACULTY")]
+    )
+
+    async def existence(_config, time_slot, environment, *, target_date):
+        return (target_date, environment) in present
+
+    async def publication(_config, payload, environment):
+        nonlocal failed_once
+        key = (payload["date"], environment)
+        if key == (dates[0], "prod") and not failed_once:
+            failed_once = True
+            raise RuntimeError("prod unavailable")
+        present.add(key)
+        return _accepted()
+
+    publish = AsyncMock(side_effect=publication)
+
+    with (
+        patch.object(handler, "_week_dates", return_value=dates),
+        patch.object(handler, "meal_exists", AsyncMock(side_effect=existence)),
+        patch.object(handler, "scrape", scrape),
+        patch.object(
+            handler,
+            "interpret_menu",
+            AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
+        ),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        with pytest.raises(handler.RetryableApiSendError):
+            handler.lambda_handler(
+                {
+                    "operation": "schedule_faculty",
+                    "trigger": "step_functions",
+                    "schedule_mode": "next_week",
+                    "notify_summary": False,
+                },
+                _Context(),
+            )
+        retry = handler.lambda_handler(
+            {
+                "operation": "schedule_faculty",
+                "trigger": "step_functions",
+                "schedule_mode": "next_week",
+                "notify_summary": False,
+            },
+            _Context(),
+        )
+
+    assert [call.args[1] for call in scrape.await_args_list] == [*dates, dates[0]]
+    assert publish.await_count == 5
+    assert json.loads(retry["body"])["remaining_missing"] == []
+
+
+@pytest.mark.parametrize(("retry_count", "alerts", "raises"), [(8, 0, True), (9, 1, False)])
+def test_general_restaurant_alerts_only_when_retry_cap_is_exhausted(
+    retry_count, alerts, raises
+):
+    slack = AsyncMock()
+
+    def invoke():
+        return handler.lambda_handler(
+            {
+                "operation": "schedule_faculty",
+                "trigger": "step_functions",
+                "target_date": "20260929",
+                "retry_count": retry_count,
+                "schedule_mode": "next_week",
+                "notify_summary": True,
+            },
+            _Context(),
+        )
+
+    with (
+        patch.object(handler, "meal_exists", AsyncMock(return_value=False)),
+        patch.object(handler, "scrape", AsyncMock(return_value=[])),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        if raises:
+            with pytest.raises(handler.RetryableEmptyMenuError):
+                invoke()
+        else:
+            response = invoke()
+            assert response["statusCode"] == 200
+
+    assert slack.await_count == alerts
+    if alerts:
+        assert slack.await_args is not None
+        assert slack.await_args.args[1]["type"] == "weekly_completeness"
+
+
+@pytest.mark.parametrize("notify_summary", [False, True])
+def test_dormitory_missing_slots_alert_only_on_deadline(notify_summary):
+    dates = ["20260928", "20260929"]
+    slack = AsyncMock()
+    with (
+        patch.object(handler, "_week_dates", return_value=dates),
+        patch.object(
+            handler,
+            "_now_seoul",
+            return_value=datetime(2026, 9, 28, 16, 5, tzinfo=ZoneInfo("Asia/Seoul")),
+        ),
+        patch.object(handler, "meal_exists", AsyncMock(return_value=False)),
+        patch.object(handler, "scrape", AsyncMock(return_value=[])),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        response = handler.lambda_handler(
+            {
+                "operation": "schedule_dormitory",
+                "schedule_mode": "current_week",
+                "notify_summary": notify_summary,
+            },
+            _Context(),
+        )
+
+    assert response["statusCode"] == 200
+    assert slack.await_count == int(notify_summary)
+    if notify_summary:
+        assert slack.await_args is not None
+        assert slack.await_args.args[1]["type"] == "weekly_completeness"
+
+
+@pytest.mark.parametrize("operation", ["scrape_faculty", "schedule_faculty"])
+def test_get_failure_blocks_post_for_manual_and_scheduled_paths(operation):
+    publish = AsyncMock()
+    with (
+        patch.object(handler, "meal_exists", AsyncMock(side_effect=RuntimeError("GET failed"))),
+        patch.object(
+            handler,
+            "scrape",
+            AsyncMock(return_value=[_raw("20260929", "FACULTY")]),
+        ),
+        patch.object(
+            handler,
+            "interpret_menu",
+            AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
+        ),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        response = handler.lambda_handler(
+            {
+                "operation": operation,
+                "target_date": "20260929",
+                "schedule_mode": "remaining_week",
+            },
+            _Context(),
+        )
+
+    publish.assert_not_awaited()
+    assert response["statusCode"] in {200, 400}
+
+
+def test_manual_present_slot_skips_interpretation_and_post():
+    interpret = AsyncMock()
+    publish = AsyncMock()
+    with (
+        patch.object(handler, "meal_exists", AsyncMock(return_value=True)),
+        patch.object(
+            handler,
+            "scrape",
+            AsyncMock(return_value=[_raw("20260929", "FACULTY")]),
+        ),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        response = handler.lambda_handler(
+            {"operation": "scrape_faculty", "target_date": "20260929"},
+            _Context(),
+        )
+
+    assert response["statusCode"] == 200
+    interpret.assert_not_awaited()
+    publish.assert_not_awaited()
+
+
+def test_source_http_failure_isolated_per_date_and_later_date_publishes():
+    class SourceHttpError(RuntimeError):
+        outcome = "API_FAILURE"
+
+    dates = ["20260928", "20260929"]
+    scrape = AsyncMock(
+        side_effect=[SourceHttpError("source 500"), [_raw(dates[1], "FACULTY")]]
+    )
+    publish = AsyncMock(return_value=_accepted())
+    with (
+        patch.object(handler, "_week_dates", return_value=dates),
+        patch.object(
+            handler,
+            "_now_seoul",
+            return_value=datetime(2026, 9, 28, 16, 5, tzinfo=ZoneInfo("Asia/Seoul")),
+        ),
+        patch.object(handler, "meal_exists", AsyncMock(return_value=False)),
+        patch.object(handler, "scrape", scrape),
+        patch.object(
+            handler,
+            "interpret_menu",
+            AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
+        ),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        response = handler.lambda_handler(
+            {
+                "operation": "schedule_faculty",
+                "schedule_mode": "remaining_week",
+                "notify_summary": False,
+            },
+            _Context(),
+        )
+
+    assert response["statusCode"] == 200
+    assert scrape.await_count == 2
+    assert {call.args[1]["date"] for call in publish.await_args_list} == {dates[1]}
+    assert {item["date"] for item in json.loads(response["body"])["remaining_missing"]} == {
+        dates[0]
+    }
+
+
+@pytest.mark.parametrize(
+    ("operation", "schedule_mode"),
+    [("schedule_faculty", "remaining_week"), ("schedule_dormitory", "current_week")],
+)
+def test_recovery_and_dormitory_missing_slots_do_not_raise_retryable(
+    operation, schedule_mode
+):
+    with (
+        patch.object(handler, "meal_exists", AsyncMock(return_value=False)),
+        patch.object(handler, "scrape", AsyncMock(return_value=[])),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        response = handler.lambda_handler(
+            {
+                "operation": operation,
+                "target_date": "20260929",
+                "schedule_mode": schedule_mode,
+                "notify_summary": False,
+            },
+            _Context(),
+        )
+
+    assert response["statusCode"] == 200
+
+
+def test_dormitory_deadline_alert_contains_only_today_missing_slots():
+    dates = ["20260928", "20260929", "20260930"]
+    slack = AsyncMock()
+    fixed_now = datetime(2026, 9, 29, 10, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    with (
+        patch.object(handler, "_now_seoul", return_value=fixed_now),
+        patch.object(handler, "_week_dates", return_value=dates),
+        patch.object(handler, "meal_exists", AsyncMock(return_value=False)),
+        patch.object(handler, "scrape", AsyncMock(return_value=[])),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        response = handler.lambda_handler(
+            {
+                "operation": "schedule_dormitory",
+                "schedule_mode": "current_week",
+                "notify_summary": True,
+            },
+            _Context(),
+        )
+
+    assert response["statusCode"] == 200
+    slack.assert_awaited_once()
+    assert slack.await_args is not None
+    missing = slack.await_args.args[1]["remaining_missing"]
+    assert {item["date"] for item in missing} == {"20260929"}
+    assert json.loads(response["body"])["completeness"]["total"] == 6
+
+
+def test_next_week_retry_crossing_midnight_sets_delayed_schedule_and_same_week():
+    config = handler.load_operation_config("schedule_haksik")
+    assert config is not None
+    monday = datetime(2026, 9, 21, 0, 5, tzinfo=ZoneInfo("Asia/Seoul"))
+    event = {
+        "schedule_mode": "next_week",
+        "schedule_anchor": "2026-09-20T07:00:00Z",
+        "retry_count": 4,
+        "delayed_schedule": False,
+    }
+
+    with patch.object(handler, "_now_seoul", return_value=monday):
+        request = handler.parse_event(event)
+        dates = handler._dates_for(config, request)
+
+    assert request["delayed_schedule"] is True
+    assert request["schedule_mode"] == "current_week"
+    assert dates == ["20260921", "20260922", "20260923", "20260924", "20260925"]
+
+
+def test_step_functions_retry_after_midnight_keeps_retrying_original_week():
+    monday = datetime(2026, 9, 21, 0, 5, tzinfo=ZoneInfo("Asia/Seoul"))
+    with (
+        patch.object(handler, "_now_seoul", return_value=monday),
+        patch.object(handler, "meal_exists", AsyncMock(return_value=False)),
+        patch.object(handler, "scrape", AsyncMock(return_value=[])),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        with pytest.raises(handler.RetryableEmptyMenuError) as raised:
+            handler.lambda_handler(
+                {
+                    "operation": "schedule_haksik",
+                    "trigger": "step_functions",
+                    "schedule_mode": "next_week",
+                    "schedule_anchor": "2026-09-20T07:00:00Z",
+                    "retry_count": 4,
+                    "delayed_schedule": True,
+                    "notify_summary": True,
+                },
+                _Context(),
+            )
+
+    assert raised.value.target_date == "20260921"

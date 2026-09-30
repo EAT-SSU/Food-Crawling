@@ -31,7 +31,7 @@ _observation_logger.propagate = False
 
 _DATE_PATTERN = re.compile(r"\d{8}")
 _TRIGGERS = frozenset({"direct", "eventbridge", "iam", "local", "step_functions"})
-_SCHEDULE_MODES = frozenset({"next_week", "current_week", "tomorrow"})
+_SCHEDULE_MODES = frozenset({"next_week", "current_week", "remaining_week"})
 _CONTENT_HEADERS = {"Content-Type": "application/json; charset=utf-8"}
 
 
@@ -111,7 +111,7 @@ def parse_event(event: object) -> dict[str, Any]:
     payload = _mapping(event)
     query = _mapping(payload.get("queryStringParameters"))
     raw_trigger = payload.get("trigger")
-    delayed = payload.get("delayed_schedule", query.get("delayed_schedule"))
+    raw_delayed = payload.get("delayed_schedule", query.get("delayed_schedule"))
     execution_id = payload.get("execution_id")
     raw_schedule_mode = payload.get("schedule_mode", query.get("schedule_mode"))
     schedule_mode = (
@@ -119,18 +119,31 @@ def parse_event(event: object) -> dict[str, Any]:
         if isinstance(raw_schedule_mode, str) and raw_schedule_mode in _SCHEDULE_MODES
         else None
     )
-    if schedule_mode is None and _boolean(delayed):
+    retry_count = _retry_count(payload.get("retry_count", 0))
+    schedule_anchor = _schedule_anchor(payload.get("schedule_anchor"))
+    delayed = _boolean(raw_delayed)
+    if (
+        not delayed
+        and retry_count > 0
+        and schedule_mode == "next_week"
+        and schedule_anchor is not None
+    ):
+        anchor_date = datetime.fromisoformat(
+            schedule_anchor.replace("Z", "+00:00")
+        ).astimezone(ZoneInfo("Asia/Seoul")).date()
+        delayed = _now_seoul().date() > anchor_date
+    if delayed and schedule_mode in {None, "next_week"}:
         schedule_mode = "current_week"
     raw_notify_summary = payload.get(
         "notify_summary", query.get("notify_summary", True)
     )
     return {
         "trigger": raw_trigger if raw_trigger in _TRIGGERS else "direct",
-        "delayed_schedule": _boolean(delayed),
+        "delayed_schedule": delayed,
         "execution_id": execution_id
         if isinstance(execution_id, str) and execution_id
         else None,
-        "retry_count": _retry_count(payload.get("retry_count", 0)),
+        "retry_count": retry_count,
         "target_date": _date(
             payload.get("target_date") or payload.get("date") or query.get("date")
         ),
@@ -138,7 +151,7 @@ def parse_event(event: object) -> dict[str, Any]:
         "notify_summary": (
             raw_notify_summary if isinstance(raw_notify_summary, bool) else True
         ),
-        "schedule_anchor": _schedule_anchor(payload.get("schedule_anchor")),
+        "schedule_anchor": schedule_anchor,
     }
 
 
@@ -220,6 +233,37 @@ async def publish_menu(
     )
 
 
+async def meal_exists(
+    config: Mapping[str, Any],
+    time_slot: str,
+    environment: str,
+    *,
+    target_date: str,
+) -> bool:
+    module = importlib.import_module("functions.clients")
+    base_url_key = "api_base_url" if environment == "prod" else "dev_api_base_url"
+    return await module.spring_meal_exists(
+        base_url=config[base_url_key],
+        environment=environment,
+        date=target_date,
+        restaurant=config["restaurant"],
+        time=time_slot,
+    )
+
+
+async def publish_if_missing(
+    config: Mapping[str, Any], payload: Mapping[str, Any], environment: str
+) -> Any | None:
+    if await meal_exists(
+        config,
+        str(payload["time"]),
+        environment,
+        target_date=str(payload["date"]),
+    ):
+        return None
+    return await publish_menu(config, payload, environment)
+
+
 async def notify_slack(config: Mapping[str, Any], notification: Mapping[str, Any]) -> Any:
     """Lazy patch boundary; final failure reaches only this client function."""
     module = importlib.import_module("functions.clients")
@@ -253,6 +297,8 @@ def _now_seoul() -> datetime:
 
 
 def _request_now(request: Mapping[str, Any]) -> datetime:
+    if request.get("delayed_schedule") is True:
+        return _now_seoul()
     anchor = request.get("schedule_anchor")
     if isinstance(anchor, str):
         return datetime.fromisoformat(anchor.replace("Z", "+00:00")).astimezone(
@@ -279,8 +325,12 @@ def _dates_for(config: Mapping[str, Any], request: Mapping[str, Any]) -> list[st
         return [target_date]
     schedule_mode = request.get("schedule_mode")
     now = _request_now(request)
-    if schedule_mode == "tomorrow":
-        return [(now + timedelta(days=1)).strftime("%Y%m%d")]
+    if schedule_mode == "remaining_week":
+        week_dates = _week_dates(
+            int(config["week_days"]), next_week=False, now=now
+        )
+        today = now.strftime("%Y%m%d")
+        return [date for date in week_dates if date >= today]
     if schedule_mode in {"current_week", "next_week"}:
         return _week_dates(
             int(config["week_days"]),
@@ -302,6 +352,19 @@ def _slot_policy(config: Mapping[str, Any], source_slot: object) -> tuple[str, i
             time_slot, price = policy
             return str(time_slot), int(price)
     return None
+
+
+def _slot_times(config: Mapping[str, Any]) -> tuple[str, ...]:
+    times: list[str] = []
+    for policy in _mapping(config.get("slots")).values():
+        if not isinstance(policy, Sequence) or isinstance(policy, (str, bytes)):
+            continue
+        if not policy:
+            continue
+        time_slot = str(policy[0])
+        if time_slot not in times:
+            times.append(time_slot)
+    return tuple(times)
 
 
 def _result_value(result: Any, name: str, default: Any) -> Any:
@@ -355,6 +418,9 @@ async def _process_source_date(
     requested_dates: Sequence[str] | None = None,
     notify_summary: bool = True,
     retry_failures: bool = True,
+    known_present: set[tuple[str, str, str]] | None = None,
+    blocked_publications: set[tuple[str, str, str]] | None = None,
+    expected_empty: set[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     workflow_retry = scheduled and retry_failures
     try:
@@ -413,6 +479,9 @@ async def _process_source_date(
     )
     critical_failures: set[str] = set()
     environments = ("dev", "prod") if scheduled else ("dev",)
+    present = known_present if known_present is not None else set()
+    blocked = blocked_publications if blocked_publications is not None else set()
+    expected = expected_empty if expected_empty is not None else set()
     critical_environment = "prod" if scheduled else "dev"
 
     for raw_meal in raw_meals:
@@ -440,10 +509,43 @@ async def _process_source_date(
                 raise RetryableEmptyMenuError(meal_date, config["restaurant"])
             summary["menus"][source_slot] = []
             summary["empty_reasons"][source_slot] = reason_code
+            if outcome == "EXPECTED_EMPTY":
+                policy = _slot_policy(config, source_slot)
+                empty_times = (
+                    _slot_times(config)
+                    if source_slot == "전체"
+                    else (policy[0],) if policy is not None else ()
+                )
+                expected.update((meal_date, time_slot) for time_slot in empty_times)
             if outcome == "AMBIGUOUS_EMPTY":
                 summary["errors"].append(
                     {"slot": source_slot, "stage": "source", "error_type": str(reason_code)}
                 )
+            continue
+        policy = _slot_policy(config, source_slot)
+        if policy is None:
+            summary["warnings"].append(
+                {"slot": source_slot, "reason": "unsupported source slot"}
+            )
+            continue
+        time_slot, price = policy
+        if not scheduled:
+            for environment in environments:
+                publication_key = (meal_date, time_slot, environment)
+                try:
+                    if await meal_exists(
+                        config,
+                        time_slot,
+                        environment,
+                        target_date=meal_date,
+                    ):
+                        present.add(publication_key)
+                except Exception:
+                    blocked.add(publication_key)
+        if all(
+            (meal_date, time_slot, environment) in present
+            for environment in environments
+        ):
             continue
         try:
             interpreted = await interpret_menu(config, raw_meal)
@@ -476,6 +578,7 @@ async def _process_source_date(
                         meal_date, config["restaurant"], reason_code
                     ) from None
             else:
+                reason_code = "PROVIDER_FAILURE"
                 emit_event(
                     "WARNING",
                     "menu_ai.request_failed",
@@ -490,7 +593,12 @@ async def _process_source_date(
                         meal_date, config["restaurant"], "PROVIDER_FAILURE"
                     ) from None
             summary["errors"].append(
-                {"slot": source_slot, "stage": "menu_ai", "error_type": type(error).__name__}
+                {
+                    "slot": source_slot,
+                    "stage": "menu_ai",
+                    "error_type": type(error).__name__,
+                    "reason_code": reason_code,
+                }
             )
             continue
 
@@ -499,13 +607,6 @@ async def _process_source_date(
         main_menus = _main_menus(interpreted, menu_names)
         if main_menus:
             summary["main_menus"][source_slot] = main_menus
-        policy = _slot_policy(config, source_slot)
-        if policy is None:
-            summary["warnings"].append(
-                {"slot": source_slot, "reason": "unsupported source slot"}
-            )
-            continue
-        time_slot, price = policy
         payload: dict[str, Any] = {
             "date": meal_date,
             "restaurant": config["restaurant"],
@@ -517,8 +618,26 @@ async def _process_source_date(
             payload["mainMenus"] = main_menus
 
         for environment in environments:
+            publication_key = (meal_date, time_slot, environment)
+            if publication_key in present:
+                continue
+            if publication_key in blocked:
+                summary["warnings"].append(
+                    {
+                        "slot": source_slot,
+                        "stage": "publication",
+                        "environment": environment,
+                        "reason": "existence check failed",
+                        "error_type": "SpringExistenceError",
+                    }
+                )
+                if environment == critical_environment:
+                    critical_failures.add(meal_date)
+                continue
             try:
-                publication = await publish_menu(config, payload, environment)
+                publication = await publish_if_missing(
+                    config, payload, environment
+                )
             except (
                 RetryableEmptyMenuError,
                 RetryableApiSendError,
@@ -538,6 +657,10 @@ async def _process_source_date(
                 )
                 if environment == critical_environment:
                     critical_failures.add(meal_date)
+                continue
+
+            present.add(publication_key)
+            if publication is None:
                 continue
 
             unmatched = _result_value(publication, "unmatchedMainMenus", None)
@@ -608,6 +731,11 @@ async def _process_source_date(
                 "error_slots": {
                     item["slot"]: item["error_type"] for item in summary["errors"]
                 },
+                "error_reasons": [
+                    item.get("reason_code")
+                    for item in summary["errors"]
+                    if item.get("reason_code")
+                ],
                 "warnings": summary["warnings"],
             }
         )
@@ -685,31 +813,187 @@ async def _run_schedule(
 ) -> dict[str, Any]:
     del event
     dates = _dates_for(config, request)
-    retry_failures = len(dates) == 1
-    results: list[dict[str, Any]] = []
-    if config["restaurant"] == "DORMITORY":
-        results.extend(
-            await _process_source_date(
-                config,
-                dates[0],
-                scheduled=True,
-                requested_dates=dates,
-                notify_summary=request["notify_summary"],
-                retry_failures=retry_failures,
+    environments = ("dev", "prod")
+    required_times = _slot_times(config)
+    known_present: set[tuple[str, str, str]] = set()
+    blocked_publications: set[tuple[str, str, str]] = set()
+    expected_empty: set[tuple[str, str]] = set()
+
+    for target_date in dates:
+        for time_slot in required_times:
+            for environment in environments:
+                try:
+                    if await meal_exists(
+                        config,
+                        time_slot,
+                        environment,
+                        target_date=target_date,
+                    ):
+                        known_present.add((target_date, time_slot, environment))
+                except Exception:
+                    blocked_publications.add((target_date, time_slot, environment))
+
+    dates_to_scrape = [
+        target_date
+        for target_date in dates
+        if any(
+            not all(
+                (target_date, time_slot, environment) in known_present
+                for environment in environments
             )
+            for time_slot in required_times
         )
-    else:
-        for target_date in dates:
+    ]
+    results: list[dict[str, Any]] = []
+    for target_date in dates_to_scrape:
+        try:
             results.extend(
                 await _process_source_date(
                     config,
                     target_date,
                     scheduled=True,
-                    notify_summary=request["notify_summary"],
-                    retry_failures=retry_failures,
+                    requested_dates=(
+                        [target_date]
+                        if config["restaurant"] == "DORMITORY"
+                        else None
+                    ),
+                    notify_summary=False,
+                    retry_failures=False,
+                    known_present=known_present,
+                    blocked_publications=blocked_publications,
+                    expected_empty=expected_empty,
                 )
             )
-    return _response(200, results)
+        except (
+            RetryableEmptyMenuError,
+            RetryableApiSendError,
+            RetryableMenuInterpretationError,
+        ):
+            raise
+        except Exception as error:
+            if getattr(error, "outcome", None) != "API_FAILURE":
+                raise
+            results.append(
+                {
+                    "date": target_date,
+                    "restaurant": config["name_ko"],
+                    "menus": {},
+                    "success": False,
+                    "error_slots": {"전체": "SOURCE_HTTP_ERROR"},
+                    "error_reasons": ["SOURCE_HTTP_ERROR"],
+                    "warnings": [
+                        {
+                            "slot": "전체",
+                            "stage": "source",
+                            "error_type": type(error).__name__,
+                        }
+                    ],
+                }
+            )
+
+    remaining_missing: list[dict[str, Any]] = []
+    secured = 0
+    expected_empty_count = 0
+    for target_date in dates:
+        for time_slot in required_times:
+            if (target_date, time_slot) in expected_empty:
+                expected_empty_count += 1
+                secured += 1
+                continue
+            missing_environments = [
+                environment
+                for environment in environments
+                if (target_date, time_slot, environment) not in known_present
+            ]
+            if missing_environments:
+                remaining_missing.append(
+                    {
+                        "date": target_date,
+                        "time": time_slot,
+                        "environments": missing_environments,
+                    }
+                )
+            else:
+                secured += 1
+
+    completeness = {
+        "secured": secured,
+        "total": len(dates) * len(required_times),
+        "expected_empty": expected_empty_count,
+    }
+    body = {
+        "results": results,
+        "remaining_missing": remaining_missing,
+        "completeness": completeness,
+    }
+    if not remaining_missing:
+        return _response(200, body)
+
+    if config["restaurant"] == "DORMITORY":
+        today = _now_seoul().strftime("%Y%m%d")
+        today_missing = [
+            item for item in remaining_missing if item["date"] == today
+        ]
+        if request["notify_summary"] and today_missing:
+            await notify_slack(
+                config,
+                {
+                    "type": "weekly_completeness",
+                    "date": dates[0],
+                    "restaurant": config["name_ko"],
+                    "completeness": completeness,
+                    "remaining_missing": today_missing,
+                },
+            )
+        return _response(200, body)
+
+    if request["trigger"] != "step_functions":
+        return _response(200, body)
+
+    if request["retry_count"] >= 9:
+        if request["notify_summary"]:
+            await notify_slack(
+                config,
+                {
+                    "type": "weekly_completeness",
+                    "date": dates[0],
+                    "restaurant": config["name_ko"],
+                    "completeness": completeness,
+                    "remaining_missing": remaining_missing,
+                },
+            )
+        return _response(200, body)
+
+    has_publication_failure = bool(blocked_publications) or any(
+        any(
+            warning.get("stage") == "publication"
+            for warning in result.get("warnings", [])
+            if isinstance(warning, Mapping)
+        )
+        for result in results
+    )
+    if has_publication_failure:
+        raise RetryableApiSendError(
+            dates[0], config["restaurant"], failed_days=len(remaining_missing)
+        )
+    has_interpretation_failure = any(
+        any(str(error).endswith("Error") for error in result["error_slots"].values())
+        for result in results
+    )
+    if has_interpretation_failure:
+        reason_code = next(
+            (
+                reason
+                for result in results
+                for reason in result.get("error_reasons", [])
+                if reason in {"PROVIDER_FAILURE", "VALIDATION_FAILED"}
+            ),
+            "VALIDATION_FAILED",
+        )
+        raise RetryableMenuInterpretationError(
+            dates[0], config["restaurant"], reason_code
+        )
+    raise RetryableEmptyMenuError(dates[0], config["restaurant"])
 
 
 async def _run_final_failure(

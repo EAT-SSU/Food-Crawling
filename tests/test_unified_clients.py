@@ -8,10 +8,12 @@ import pytest
 from tenacity import wait_none
 
 from functions.clients import (
+    SpringExistenceError,
     SlackNotificationError,
     SpringPublishError,
     publish_spring_meal,
     send_slack_text,
+    spring_meal_exists,
 )
 
 
@@ -40,6 +42,7 @@ def _session_with_response(response):
     response_context.__aenter__ = AsyncMock(return_value=response)
     response_context.__aexit__ = AsyncMock(return_value=None)
     session.post.return_value = response_context
+    session.get.return_value = response_context
     return session
 
 
@@ -155,7 +158,63 @@ async def test_slack_retries_independently_without_repeating_accepted_spring_pos
 
 
 def test_retry_policy_remains_three_attempts_with_two_second_waits():
-    for function in (publish_spring_meal, send_slack_text):
+    for function in (spring_meal_exists, publish_spring_meal, send_slack_text):
         retry_policy = cast(Any, function).retry
         assert retry_policy.stop.max_attempt_number == 3
         assert retry_policy.wait.wait_fixed == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("result", "expected"), [([], False), ([{"id": 1}], True)])
+async def test_spring_existence_check_uses_get_with_korean_language(result, expected):
+    session = _session_with_response(
+        _response(200, {"isSuccess": True, "result": result})
+    )
+
+    with patch("functions.clients.aiohttp.ClientSession", return_value=session):
+        exists = await spring_meal_exists(
+            base_url="https://spring.example/",
+            environment="prod",
+            date="20260929",
+            restaurant="HAKSIK",
+            time="MORNING",
+        )
+
+    assert exists is expected
+    session.get.assert_called_once_with(
+        "https://spring.example/meals",
+        params={
+            "date": "20260929",
+            "restaurant": "HAKSIK",
+            "time": "MORNING",
+            "language": "KO",
+        },
+        timeout=session.get.call_args.kwargs["timeout"],
+    )
+    assert session.get.call_args.kwargs["timeout"].total == 10
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        _response(500, {"message": "server error"}),
+        _response(200, "not-json"),
+        _response(200, {"isSuccess": True, "result": "invalid"}),
+    ],
+)
+async def test_spring_existence_check_fails_closed_and_retries(response):
+    session = _session_with_response(response)
+    exists_without_wait = cast(Any, spring_meal_exists).retry_with(wait=wait_none())
+
+    with patch("functions.clients.aiohttp.ClientSession", return_value=session):
+        with pytest.raises(SpringExistenceError):
+            await exists_without_wait(
+                base_url="https://spring.example",
+                environment="prod",
+                date="20260929",
+                restaurant="DORMITORY",
+                time="LUNCH",
+            )
+
+    assert session.get.call_count == 3

@@ -212,3 +212,24 @@ def test_representative_menu_rejects_unsafe_or_noncanonical_entries():
         "공급자메뉴",
     ):
         assert unsafe not in text
+
+
+def test_weekly_completeness_alert_reports_secured_slots_and_missing_deadline():
+    text = format_slack_text(
+        {
+            "type": "weekly_completeness",
+            "date": "20260928",
+            "restaurant": "기숙사식당",
+            "completeness": {"secured": 10, "total": 14, "expected_empty": 2},
+            "remaining_missing": [
+                {"date": "20260929", "time": "LUNCH", "environments": ["prod"]},
+                {"date": "20260930", "time": "DINNER", "environments": ["dev", "prod"]},
+            ],
+        }
+    )
+
+    assert text == (
+        "🍽️ 기숙사식당 (20260928)\n"
+        "⚠️ 주간 메뉴 확보: 10/14개 (미운영 2개)\n"
+        "⚠️ 마감 시점 미확보: 2개"
+    )
