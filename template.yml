@@ -107,7 +107,7 @@ Resources:
           Properties:
             ScheduleExpression: cron(5 16 ? * MON-THU *)
             ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"remaining_week","notify_summary":false}'
+            Input: '{"schedule_mode":"remaining_week","notify_summary":true}'
 
   HaksikSchedulingFunction:
     Type: AWS::Serverless::Function
@@ -125,7 +125,7 @@ Resources:
           Properties:
             ScheduleExpression: cron(5 16 ? * MON-THU *)
             ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"remaining_week","notify_summary":false}'
+            Input: '{"schedule_mode":"remaining_week","notify_summary":true}'
 
   FacultySchedulingFunction:
     Type: AWS::Serverless::Function
@@ -143,7 +143,7 @@ Resources:
           Properties:
             ScheduleExpression: cron(5 16 ? * MON-THU *)
             ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"remaining_week","notify_summary":false}'
+            Input: '{"schedule_mode":"remaining_week","notify_summary":true}'
 
   DormitorySchedulingFunction:
     Type: AWS::Serverless::Function
@@ -161,13 +161,13 @@ Resources:
           Properties:
             ScheduleExpression: cron(0 8 ? * * *)
             ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"current_week","notify_summary":false}'
+            Input: '{"schedule_mode":"current_week","notify_summary":true}'
         MidMorningSchedule:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(0 9 ? * * *)
             ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"current_week","notify_summary":false}'
+            Input: '{"schedule_mode":"current_week","notify_summary":true}'
         DeadlineSchedule:
           Type: ScheduleV2
           Properties:

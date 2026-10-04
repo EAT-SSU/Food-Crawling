@@ -78,6 +78,14 @@ def _dependencies(entry):
     return scrape, interpret, publish, slack
 
 
+def _date_summary_dates(slack: AsyncMock) -> list[str]:
+    return [
+        call.args[1]["date"]
+        for call in slack.await_args_list
+        if call.args[1]["type"] == "date_summary"
+    ]
+
+
 @pytest.mark.parametrize(
     "entry", INVOCATIONS["operations"], ids=lambda item: item["operation"]
 )
@@ -110,8 +118,7 @@ def test_all_scrape_and_schedule_operations_share_one_dispatch_boundary(entry):
     assert response["statusCode"] == entry["expected_status"]
     assert response["headers"] == {"Content-Type": "application/json; charset=utf-8"}
     assert run_count == 1
-    expected_slack_count = entry["expected_slack_count"] if entry["kind"] == "scrape" else 0
-    assert slack.await_count == expected_slack_count
+    assert slack.await_count == entry["expected_slack_count"]
     expected_environments = entry["destination_environments"]
     actual_environments = [call.args[2] for call in publish.await_args_list]
     assert set(actual_environments) == set(expected_environments)
@@ -504,7 +511,9 @@ def test_partial_dormitory_week_isolates_missing_date_and_processes_others():
     assert missing["error_slots"] == {"전체": "MISSING_DATE"}
     assert interpret.await_count == 12
     assert publish.await_count == 24
-    slack.assert_not_awaited()
+    assert _date_summary_dates(slack) == [
+        date for date in dates if date != dates[2]
+    ]
     assert {item["date"] for item in body["remaining_missing"]} == {dates[2]}
 
 
@@ -548,7 +557,7 @@ def test_weekly_dormitory_failure_is_isolated_to_its_date():
     assert response["statusCode"] == 200
     assert [result["success"] for result in results] == [True, False]
     assert results[1]["error_slots"] == {"중식": "EMPTY_CELL"}
-    slack.assert_not_awaited()
+    assert _date_summary_dates(slack) == [dates[0]]
 
 
 def test_complete_dormitory_week_including_closed_date_keeps_current_behavior():
@@ -586,7 +595,7 @@ def test_complete_dormitory_week_including_closed_date_keeps_current_behavior():
     assert response["statusCode"] == 200
     assert interpret.await_count == 12
     assert publish.await_count == 24
-    slack.assert_not_awaited()
+    assert _date_summary_dates(slack) == dates[:-1]
 
 
 def test_dormitory_closed_weekend_is_complete_without_ai_or_spring_calls():
@@ -627,7 +636,7 @@ def test_dormitory_closed_weekend_is_complete_without_ai_or_spring_calls():
     assert response["statusCode"] == 200
     assert interpret.await_count == 10
     assert publish.await_count == 20
-    slack.assert_not_awaited()
+    assert _date_summary_dates(slack) == dates[:-2]
 
 
 def test_direct_dormitory_fetches_seven_dates_once_and_aggregates_weekly_response():
@@ -879,13 +888,14 @@ def test_already_present_slot_skips_scrape_interpretation_and_post():
     scrape = AsyncMock()
     interpret = AsyncMock()
     publish = AsyncMock()
+    slack = AsyncMock()
 
     with (
         patch.object(handler, "meal_exists", exists),
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
         patch.object(handler, "publish_menu", publish),
-        patch.object(handler, "notify_slack", AsyncMock()),
+        patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler(
             {"operation": "schedule_faculty", "target_date": "20260929"},
@@ -896,7 +906,43 @@ def test_already_present_slot_skips_scrape_interpretation_and_post():
     scrape.assert_not_awaited()
     interpret.assert_not_awaited()
     publish.assert_not_awaited()
+    slack.assert_not_awaited()
     assert {call.args[2] for call in exists.await_args_list} == {"dev", "prod"}
+
+
+def test_scheduled_summary_is_sent_only_for_the_newly_published_date():
+    dates = ["20260928", "20260929"]
+
+    async def existence(_config, _time, _environment, *, target_date):
+        return target_date == dates[0]
+
+    scrape = AsyncMock(
+        side_effect=lambda _config, target_date: [_raw(target_date, "FACULTY")]
+    )
+    slack = AsyncMock()
+
+    with (
+        patch.object(handler, "_week_dates", return_value=dates),
+        patch.object(handler, "meal_exists", AsyncMock(side_effect=existence)),
+        patch.object(handler, "scrape", scrape),
+        patch.object(
+            handler,
+            "interpret_menu",
+            AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
+        ),
+        patch.object(handler, "publish_menu", AsyncMock(return_value=_accepted())),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        response = handler.lambda_handler(
+            {"operation": "schedule_faculty", "schedule_mode": "next_week"},
+            _Context(),
+        )
+
+    assert response["statusCode"] == 200
+    scrape.assert_awaited_once()
+    assert scrape.await_args is not None
+    assert scrape.await_args.args[1] == dates[1]
+    assert _date_summary_dates(slack) == [dates[1]]
 
 
 def test_haksik_existence_check_uses_configured_morning_time_for_dinner_slot():

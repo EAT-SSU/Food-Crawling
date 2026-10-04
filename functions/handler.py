@@ -478,6 +478,7 @@ async def _process_source_date(
         }
     )
     critical_failures: set[str] = set()
+    newly_published_dates: set[str] = set()
     environments = ("dev", "prod") if scheduled else ("dev",)
     present = known_present if known_present is not None else set()
     blocked = blocked_publications if blocked_publications is not None else set()
@@ -662,6 +663,7 @@ async def _process_source_date(
             present.add(publication_key)
             if publication is None:
                 continue
+            newly_published_dates.add(meal_date)
 
             unmatched = _result_value(publication, "unmatchedMainMenus", None)
             if unmatched is None:
@@ -703,7 +705,7 @@ async def _process_source_date(
             "restaurant": config["name_ko"],
             **summary,
         }
-        if notify_summary:
+        if notify_summary and (not scheduled or meal_date in newly_published_dates):
             try:
                 await notify_slack(config, notification)
             except Exception as error:
@@ -857,7 +859,7 @@ async def _run_schedule(
                         if config["restaurant"] == "DORMITORY"
                         else None
                     ),
-                    notify_summary=False,
+                    notify_summary=request["notify_summary"],
                     retry_failures=False,
                     known_present=known_present,
                     blocked_publications=blocked_publications,
