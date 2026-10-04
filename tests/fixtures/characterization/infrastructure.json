@@ -38,7 +38,7 @@
     "scheduling_functions": ["DodamSchedulingFunction", "HaksikSchedulingFunction", "FacultySchedulingFunction"],
     "expression": "cron(0 16 ? * SUN *)",
     "weekly_input": "{\"schedule_mode\":\"next_week\",\"notify_summary\":true}",
-    "recovery_input": "{\"schedule_mode\":\"remaining_week\",\"notify_summary\":false}",
+    "recovery_input": "{\"schedule_mode\":\"remaining_week\",\"notify_summary\":true}",
     "event_type": "ScheduleV2"
   },
   "dormitory_schedule": {"expressions": ["cron(0 8 ? * * *)", "cron(0 9 ? * * *)", "cron(0 10 ? * * *)"]},
