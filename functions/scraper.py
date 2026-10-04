@@ -115,8 +115,12 @@ def _normalized_text(value: str) -> str:
     return " ".join(value.split())
 
 
+_CLOSURE_SENTENCE = re.compile(r"(휴무|미운영)\s*(입니다|합니다)\.?$")
+
+
 def _is_closure(value: str) -> bool:
-    return _normalized_text(value) in _CLOSURE_MARKERS
+    text = _normalized_text(value)
+    return text in _CLOSURE_MARKERS or bool(_CLOSURE_SENTENCE.search(text))
 
 
 def _is_day_closure(soup: BeautifulSoup) -> bool:

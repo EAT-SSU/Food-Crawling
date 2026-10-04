@@ -218,6 +218,36 @@ def test_soongguri_holiday_and_slot_empty_outcomes_are_explicit():
     assert records[1].outcome == SUCCESS
 
 
+@pytest.mark.parametrize(
+    "notice",
+    ["대체공휴일 로 휴무 입니다.", "한글날 로 휴무 입니다."],
+)
+def test_soongguri_sentence_style_closure_notice_is_expected_empty(notice):
+    records = parse_soongguri_html(
+        "<table>"
+        f'<tr><td class="menu_nm">중식1</td><td>{notice}</td></tr>'
+        "</table>",
+        "20261009",
+        "DODAM",
+    )
+
+    assert records[0].outcome == EXPECTED_EMPTY
+    assert records[0].reason_code == "CLOSED_MARKER"
+
+
+def test_soongguri_menu_with_embedded_closure_words_remains_success():
+    records = parse_soongguri_html(
+        "<table>"
+        '<tr><td class="menu_nm">중식1</td>'
+        "<td>휴무 입니다. 이후 제육볶음 제공</td></tr>"
+        "</table>",
+        "20261009",
+        "DODAM",
+    )
+
+    assert records[0].outcome == SUCCESS
+
+
 def test_soongguri_empty_and_malformed_sources_fail_deterministically():
     with pytest.raises(SourceParseError) as empty:
         parse_soongguri_html("", "20260713", "HAKSIK")
