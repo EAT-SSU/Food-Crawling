@@ -259,13 +259,30 @@ def test_soongguri_menu_with_embedded_closure_words_remains_success():
     records = parse_soongguri_html(
         "<table>"
         '<tr><td class="menu_nm">중식1</td>'
-        "<td>휴무 입니다. 이후 제육볶음 제공</td></tr>"
+        "<td>★ 휴무없는 제육볶음 - 5.0</td></tr>"
         "</table>",
         "20261009",
         "DODAM",
     )
 
     assert records[0].outcome == SUCCESS
+
+
+def test_soongguri_long_closure_notice_without_price_is_expected_empty():
+    notice = (
+        "중식4 [공지] 10월 8일(목) 웰빙코너 휴무 안내 "
+        "개교 129주년 기념행사로 인해 아래와 같이 웰빙코너 운영을 중단합니다."
+    )
+    records = parse_soongguri_html(
+        "<table>"
+        f'<tr><td class="menu_nm">중식4</td><td>{notice}</td></tr>'
+        "</table>",
+        "20261008",
+        "DODAM",
+    )
+
+    assert records[0].outcome == EXPECTED_EMPTY
+    assert records[0].reason_code == "CLOSED_MARKER"
 
 
 def test_soongguri_empty_and_malformed_sources_fail_deterministically():

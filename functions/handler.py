@@ -137,6 +137,7 @@ def parse_event(event: object) -> dict[str, Any]:
     raw_notify_summary = payload.get(
         "notify_summary", query.get("notify_summary", True)
     )
+    raw_publish_mode = payload.get("publish_mode", query.get("publish_mode"))
     return {
         "trigger": raw_trigger if raw_trigger in _TRIGGERS else "direct",
         "delayed_schedule": delayed,
@@ -152,6 +153,7 @@ def parse_event(event: object) -> dict[str, Any]:
             raw_notify_summary if isinstance(raw_notify_summary, bool) else True
         ),
         "schedule_anchor": schedule_anchor,
+        "publish_mode": "force" if raw_publish_mode == "force" else "fill",
     }
 
 
@@ -215,21 +217,23 @@ async def interpret_menu(
     )
 
 
-async def publish_menu(
-    config: Mapping[str, Any], payload: Mapping[str, Any], environment: str
+async def replace_slot(
+    config: Mapping[str, Any],
+    target_date: str,
+    time_slot: str,
+    items: Sequence[Mapping[str, object]],
+    environment: str,
 ) -> Any:
-    """Lazy patch boundary for accepted Spring writes in Task 5."""
+    """Replace one Spring date, restaurant, and time slot."""
     module = importlib.import_module("functions.clients")
     base_url_key = "api_base_url" if environment == "prod" else "dev_api_base_url"
-    return await module.publish_spring_meal(
+    return await module.replace_spring_slot(
         base_url=config[base_url_key],
         environment=environment,
-        date=payload["date"],
-        restaurant=payload["restaurant"],
-        time=payload["time"],
-        menu_names=payload["menuNames"],
-        price=payload["price"],
-        main_menus=payload.get("mainMenus"),
+        date=target_date,
+        restaurant=config["restaurant"],
+        time=time_slot,
+        items=items,
     )
 
 
@@ -422,6 +426,7 @@ async def _process_source_date(
     requested_dates: Sequence[str] | None = None,
     notify_summary: bool = True,
     retry_failures: bool = True,
+    publish_mode: str = "fill",
 ) -> list[dict[str, Any]]:
     workflow_retry = scheduled and retry_failures
     try:
@@ -469,6 +474,12 @@ async def _process_source_date(
             }
             for missing_date in sorted(missing_dates)
         )
+    today = _now_seoul().strftime("%Y%m%d")
+    raw_meals = [
+        raw_meal
+        for raw_meal in raw_meals
+        if _meal_date(raw_meal, target_date) >= today
+    ]
 
     summaries: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
@@ -480,7 +491,7 @@ async def _process_source_date(
         }
     )
     critical_failures: set[str] = set()
-    newly_published_dates: set[str] = set()
+    changed_dates: set[str] = set()
     environments = ("dev", "prod") if scheduled else ("dev",)
     blocked: set[tuple[str, str, str]] = set()
     requirements: set[tuple[str, str, str]] = set()
@@ -488,52 +499,33 @@ async def _process_source_date(
     expected_empty: set[tuple[str, str, str]] = set()
     critical_environment = "prod" if scheduled else "dev"
 
-    corners_by_publication: dict[
-        tuple[str, str, str], list[tuple[int, tuple[str, str, str], str]]
+    ambiguous_slots: set[tuple[str, str]] = set()
+    corners_by_slot: dict[
+        tuple[str, str],
+        list[tuple[int, tuple[str, str, str], Mapping[str, Any], int]],
     ] = defaultdict(list)
     for source_index, raw_meal in enumerate(raw_meals):
-        if raw_meal.get("outcome", "SUCCESS") != "SUCCESS":
-            continue
         meal_date = _meal_date(raw_meal, target_date)
         source_slot = _source_slot(raw_meal)
+        if raw_meal.get("outcome") == "AMBIGUOUS_EMPTY":
+            policy = _slot_policy(config, source_slot)
+            ambiguous_times = (
+                _slot_times(config)
+                if source_slot == "전체"
+                else (policy[0],) if policy is not None else ()
+            )
+            ambiguous_slots.update((meal_date, time_slot) for time_slot in ambiguous_times)
+            continue
+        if raw_meal.get("outcome", "SUCCESS") != "SUCCESS":
+            continue
         policy = _slot_policy(config, source_slot)
         if policy is None:
             continue
-        time_slot, _ = policy
+        time_slot, price = policy
         requirement = (meal_date, source_slot, time_slot)
-        raw_text = raw_meal.get("raw_text", "")
-        for environment in environments:
-            corners_by_publication[(meal_date, time_slot, environment)].append(
-                (source_index, requirement, str(raw_text))
-            )
-
-    for publication_key, corners in corners_by_publication.items():
-        try:
-            meals = await existing_meals(
-                config,
-                publication_key[1],
-                publication_key[2],
-                target_date=publication_key[0],
-            )
-        except Exception:
-            blocked.add(publication_key)
-            continue
-        candidates: list[tuple[float, int, int, tuple[str, str, str]]] = []
-        for source_index, requirement, raw_text in corners:
-            for meal_index, menu_names in enumerate(meals):
-                score = _existing_meal_score(menu_names, raw_text)
-                if score >= 0.5:
-                    candidates.append(
-                        (-score, source_index, meal_index, requirement)
-                    )
-        assigned_corners: set[tuple[str, str, str]] = set()
-        assigned_meals: set[int] = set()
-        for _, _, meal_index, requirement in sorted(candidates):
-            if requirement in assigned_corners or meal_index in assigned_meals:
-                continue
-            assigned_corners.add(requirement)
-            assigned_meals.add(meal_index)
-            covered.add((*requirement, publication_key[2]))
+        corners_by_slot[(meal_date, time_slot)].append(
+            (source_index, requirement, raw_meal, price)
+        )
 
     for raw_meal in raw_meals:
         meal_date = _meal_date(raw_meal, target_date)
@@ -596,31 +588,21 @@ async def _process_source_date(
                 {"slot": source_slot, "reason": "unsupported source slot"}
             )
             continue
-        time_slot, price = policy
+        time_slot, _ = policy
         requirement = (meal_date, source_slot, time_slot)
         requirements.add(requirement)
-        if all(
-            (*requirement, environment) in covered
-            for environment in environments
-        ):
-            continue
-        if all(
-            (meal_date, time_slot, environment) in blocked
-            for environment in environments
-        ):
-            for environment in environments:
-                summary["warnings"].append(
-                    {
-                        "slot": source_slot,
-                        "stage": "publication",
-                        "environment": environment,
-                        "reason": "existence check failed",
-                        "error_type": "SpringExistenceError",
-                    }
-                )
-                if environment == critical_environment:
-                    critical_failures.add(meal_date)
-            continue
+
+    interpretations: dict[tuple[str, str, str], dict[str, object] | None] = {}
+
+    async def interpretation_item(
+        requirement: tuple[str, str, str],
+        raw_meal: Mapping[str, Any],
+        price: int,
+    ) -> dict[str, object] | None:
+        if requirement in interpretations:
+            return interpretations[requirement]
+        meal_date, source_slot, _ = requirement
+        summary = summaries[meal_date]
         try:
             interpreted = await interpret_menu(config, raw_meal)
         except (
@@ -634,38 +616,37 @@ async def _process_source_date(
             is_validation_error = isinstance(
                 error, menu_ai_module.MenuInterpretationError
             )
-            if is_validation_error:
-                reason_code = getattr(error, "reason_code", "VALIDATION_FAILED")
-                if reason_code not in menu_ai_module.MENU_INTERPRETATION_REASON_CODES:
-                    reason_code = "VALIDATION_FAILED"
-                emit_event(
-                    "WARNING",
-                    "menu_ai.validation_failed",
-                    "menu_ai",
-                    date=meal_date,
-                    slot=source_slot,
-                    error_type="MenuInterpretationError",
-                    reason_code=reason_code,
-                )
-                if workflow_retry:
-                    raise RetryableMenuInterpretationError(
-                        meal_date, config["restaurant"], reason_code
-                    ) from None
-            else:
-                reason_code = "PROVIDER_FAILURE"
-                emit_event(
-                    "WARNING",
-                    "menu_ai.request_failed",
-                    "menu_ai",
-                    date=meal_date,
-                    slot=source_slot,
-                    error_type="MenuProviderError",
-                    reason_code="PROVIDER_FAILURE",
-                )
-                if workflow_retry:
-                    raise RetryableMenuInterpretationError(
-                        meal_date, config["restaurant"], "PROVIDER_FAILURE"
-                    ) from None
+            reason_code = (
+                getattr(error, "reason_code", "VALIDATION_FAILED")
+                if is_validation_error
+                else "PROVIDER_FAILURE"
+            )
+            if (
+                is_validation_error
+                and reason_code not in menu_ai_module.MENU_INTERPRETATION_REASON_CODES
+            ):
+                reason_code = "VALIDATION_FAILED"
+            emit_event(
+                "WARNING",
+                (
+                    "menu_ai.validation_failed"
+                    if is_validation_error
+                    else "menu_ai.request_failed"
+                ),
+                "menu_ai",
+                date=meal_date,
+                slot=source_slot,
+                error_type=(
+                    "MenuInterpretationError"
+                    if is_validation_error
+                    else "MenuProviderError"
+                ),
+                reason_code=reason_code,
+            )
+            if workflow_retry:
+                raise RetryableMenuInterpretationError(
+                    meal_date, config["restaurant"], reason_code
+                ) from None
             summary["errors"].append(
                 {
                     "slot": source_slot,
@@ -674,53 +655,128 @@ async def _process_source_date(
                     "reason_code": reason_code,
                 }
             )
-            continue
-
+            interpretations[requirement] = None
+            return None
         menu_names = _menu_names(interpreted)
-        summary["menus"][source_slot] = menu_names
         main_menus = _main_menus(interpreted, menu_names)
+        summary["menus"][source_slot] = menu_names
         if main_menus:
             summary["main_menus"][source_slot] = main_menus
-        payload: dict[str, Any] = {
-            "date": meal_date,
-            "restaurant": config["restaurant"],
-            "time": time_slot,
-            "price": price,
+        item: dict[str, object] = {
             "menuNames": menu_names,
+            "price": price,
+            "mainMenus": main_menus,
         }
-        if main_menus:
-            payload["mainMenus"] = main_menus
+        interpretations[requirement] = item
+        return item
 
+    for (meal_date, time_slot), corners in corners_by_slot.items():
+        if (meal_date, time_slot) in ambiguous_slots or not corners:
+            continue
+        summary = summaries[meal_date]
         for environment in environments:
             publication_key = (meal_date, time_slot, environment)
-            if (*requirement, environment) in covered:
-                continue
-            if publication_key in blocked:
-                summary["warnings"].append(
-                    {
-                        "slot": source_slot,
-                        "stage": "publication",
-                        "environment": environment,
-                        "reason": "existence check failed",
-                        "error_type": "SpringExistenceError",
-                    }
+            try:
+                meals = await existing_meals(
+                    config,
+                    time_slot,
+                    environment,
+                    target_date=meal_date,
                 )
+            except Exception:
+                blocked.add(publication_key)
+                for _, requirement, _, _ in corners:
+                    summary["warnings"].append(
+                        {
+                            "slot": requirement[1],
+                            "stage": "publication",
+                            "environment": environment,
+                            "reason": "existence check failed",
+                            "error_type": "SpringExistenceError",
+                        }
+                    )
                 if environment == critical_environment:
                     critical_failures.add(meal_date)
                 continue
-            try:
-                publication = await publish_menu(config, payload, environment)
-            except (
-                RetryableEmptyMenuError,
-                RetryableApiSendError,
-                RetryableMenuInterpretationError,
+
+            mapped: dict[tuple[str, str, str], list[str]] = {}
+            candidates: list[tuple[float, int, int, tuple[str, str, str]]] = []
+            for source_index, requirement, raw_meal, _ in corners:
+                raw_text = str(raw_meal.get("raw_text", ""))
+                for meal_index, menu_names in enumerate(meals):
+                    score = _existing_meal_score(menu_names, raw_text)
+                    if score >= 0.5:
+                        candidates.append(
+                            (-score, source_index, meal_index, requirement)
+                        )
+            assigned_corners: set[tuple[str, str, str]] = set()
+            assigned_meals: set[int] = set()
+            for _, _, meal_index, requirement in sorted(candidates):
+                if requirement in assigned_corners or meal_index in assigned_meals:
+                    continue
+                assigned_corners.add(requirement)
+                assigned_meals.add(meal_index)
+                mapped[requirement] = meals[meal_index]
+
+            if (
+                publish_mode == "fill"
+                and len(mapped) == len(corners)
+                and len(meals) == len(corners)
             ):
-                raise
+                for _, requirement, _, _ in corners:
+                    covered.add((*requirement, environment))
+                continue
+
+            desired_items: list[dict[str, object]] = []
+            slot_interpretation_failed = False
+            for _, requirement, raw_meal, price in corners:
+                item: dict[str, object]
+                if publish_mode == "fill" and requirement in mapped:
+                    item = {
+                        "menuNames": mapped[requirement],
+                        "price": price,
+                        "mainMenus": None,
+                    }
+                    summary["menus"][requirement[1]] = mapped[requirement]
+                else:
+                    interpreted_item = await interpretation_item(
+                        requirement, raw_meal, price
+                    )
+                    if interpreted_item is None:
+                        slot_interpretation_failed = True
+                        break
+                    item = interpreted_item
+                desired_items.append(item)
+            if slot_interpretation_failed:
+                continue
+
+            existing_signatures = sorted(
+                tuple(sorted(menu_names)) for menu_names in meals
+            )
+            desired_signatures = sorted(
+                tuple(
+                    sorted(
+                        name
+                        for name in menu_names
+                        if isinstance(name, str)
+                    )
+                )
+                for item in desired_items
+                if isinstance((menu_names := item["menuNames"]), list)
+            )
+            try:
+                publication = await replace_slot(
+                    config,
+                    meal_date,
+                    time_slot,
+                    desired_items,
+                    environment,
+                )
             except Exception as error:
-                logger.warning("Spring publication failed: %s", type(error).__name__)
+                logger.warning("Spring slot replacement failed: %s", type(error).__name__)
                 summary["warnings"].append(
                     {
-                        "slot": source_slot,
+                        "slot": time_slot,
                         "stage": "publication",
                         "environment": environment,
                         "reason": "publication failed",
@@ -731,31 +787,47 @@ async def _process_source_date(
                     critical_failures.add(meal_date)
                 continue
 
-            covered.add((*requirement, environment))
-            newly_published_dates.add(meal_date)
-
-            unmatched = _result_value(publication, "unmatchedMainMenus", None)
-            if unmatched is None:
-                unmatched = _result_value(publication, "unmatched_main_menus", [])
-            warnings = _result_value(publication, "warnings", [])
-            if unmatched:
-                summary["warnings"].append(
-                    {
-                        "slot": source_slot,
-                        "stage": "unmatched",
-                        "reason": "unmatched main menus",
-                        "items": unmatched,
-                    }
-                )
-            if warnings:
-                summary["warnings"].append(
-                    {
-                        "slot": source_slot,
-                        "stage": "publication",
-                        "reason": "accepted response warning",
-                        "items": warnings,
-                    }
-                )
+            for _, requirement, _, _ in corners:
+                covered.add((*requirement, environment))
+            deleted_ids = list(
+                _result_value(publication, "deleted_meal_ids", ())
+            )
+            if existing_signatures != desired_signatures or deleted_ids:
+                changed_dates.add(meal_date)
+            unmatched_by_item = _result_value(
+                publication, "unmatched_main_menus", ()
+            )
+            for corner, unmatched in zip(corners, unmatched_by_item):
+                if unmatched:
+                    summary["warnings"].append(
+                        {
+                            "slot": corner[1][1],
+                            "stage": "unmatched",
+                            "reason": "unmatched main menus",
+                            "items": list(unmatched),
+                        }
+                    )
+            kept_ids = list(_result_value(publication, "kept_with_reviews", ()))
+            if kept_ids:
+                try:
+                    await notify_slack(
+                        config,
+                        {
+                            "type": "kept_with_reviews",
+                            "date": meal_date,
+                            "restaurant": config["name_ko"],
+                            "time": time_slot,
+                            "meal_ids": kept_ids,
+                        },
+                    )
+                except Exception as error:
+                    emit_event(
+                        "WARNING",
+                        "notification.failed",
+                        "notification",
+                        date=meal_date,
+                        error_type=type(error).__name__,
+                    )
 
     if workflow_retry and critical_failures:
         raise RetryableApiSendError(
@@ -802,7 +874,7 @@ async def _process_source_date(
             "restaurant": config["name_ko"],
             **summary,
         }
-        if notify_summary and (not scheduled or meal_date in newly_published_dates):
+        if notify_summary and (not scheduled or meal_date in changed_dates):
             try:
                 await notify_slack(config, notification)
             except Exception as error:
@@ -880,6 +952,7 @@ async def _run_scrape(
             target_date,
             scheduled=False,
             requested_dates=requested_dates,
+            publish_mode=request["publish_mode"],
         )
         menus = {
             f"{result['date']}_{slot}": items
@@ -901,7 +974,12 @@ async def _run_scrape(
             "special_note": config.get("special_note"),
         }
     else:
-        results = await _process_source_date(config, target_date, scheduled=False)
+        results = await _process_source_date(
+            config,
+            target_date,
+            scheduled=False,
+            publish_mode=request["publish_mode"],
+        )
         result = results[0]
         body = {
             "success": result["success"],
@@ -936,6 +1014,7 @@ async def _run_schedule(
                     ),
                     notify_summary=request["notify_summary"],
                     retry_failures=False,
+                    publish_mode=request["publish_mode"],
                 )
             )
         except (

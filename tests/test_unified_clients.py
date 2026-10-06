@@ -11,8 +11,8 @@ from functions import clients as clients_module
 from functions.clients import (
     SpringExistenceError,
     SlackNotificationError,
-    SpringPublishError,
-    publish_spring_meal,
+    SpringSlotReplaceError,
+    replace_spring_slot,
     send_slack_text,
     spring_existing_meals,
 )
@@ -43,6 +43,7 @@ def _session_with_response(response):
     response_context.__aenter__ = AsyncMock(return_value=response)
     response_context.__aexit__ = AsyncMock(return_value=None)
     session.post.return_value = response_context
+    session.put.return_value = response_context
     session.get.return_value = response_context
     return session
 
@@ -62,81 +63,52 @@ def _spring_arguments(**overrides: object) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("fixture_name", "expected_unmatched", "expects_warning"),
-    [
-        ("accepted_matched", (), False),
-        (
-            "accepted_unmatched",
-            ({"nameKo": "없는메뉴", "nameEn": "Missing"},),
-            False,
-        ),
-        ("accepted_empty", (), False),
-        ("accepted_malformed", (), True),
-    ],
-)
-async def test_spring_accepted_responses_are_never_retried(
-    fixture_name, expected_unmatched, expects_warning
-):
-    fixture = FIXTURE["responses"][fixture_name]
-    session = _session_with_response(_response(fixture["status"], fixture["body"]))
-
-    with patch("functions.clients.aiohttp.ClientSession", return_value=session):
-        result = await publish_spring_meal(**_spring_arguments())
-
-    assert result.accepted is True
-    assert result.unmatched_main_menus == expected_unmatched
-    assert bool(result.warnings) is expects_warning
-    session.post.assert_called_once()
-    assert session.post.call_args.args == ("https://spring.example/meals/with-price",)
-    assert session.post.call_args.kwargs["params"] == REQUEST["query"]
-    assert session.post.call_args.kwargs["json"] == REQUEST["body"]
-    assert session.post.call_args.kwargs["timeout"].total == REQUEST["timeout_seconds"]
-
-
-@pytest.mark.asyncio
-async def test_spring_includes_only_validated_non_empty_main_menus():
-    session = _session_with_response(_response(200, {"unmatchedMainMenus": []}))
-    main_menus = [{"nameKo": "제육볶음", "nameEn": "Spicy Pork"}]
-
-    with patch("functions.clients.aiohttp.ClientSession", return_value=session):
-        await publish_spring_meal(**_spring_arguments(main_menus=main_menus))
-
-    assert session.post.call_args.kwargs["json"] == {
-        **REQUEST["body"],
-        "mainMenus": main_menus,
-    }
-
-    with pytest.raises(ValueError, match="validated and non-empty"):
-        await publish_spring_meal(
-            **_spring_arguments(
-                main_menus=[{"nameKo": "없는메뉴", "nameEn": "Missing"}]
-            )
-        )
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["status", "transport"])
-async def test_spring_retries_non_2xx_and_transport_failures_three_times(failure):
+async def test_slot_put_retries_non_2xx_and_transport_failures_three_times(failure):
     session = _session_with_response(_response(500, {"message": "server error"}))
     if failure == "transport":
-        session.post.side_effect = aiohttp.ClientConnectionError("offline")
-    publish_without_wait = cast(Any, publish_spring_meal).retry_with(wait=wait_none())
+        session.put.side_effect = aiohttp.ClientConnectionError("offline")
+    replace_without_wait = cast(Any, replace_spring_slot).retry_with(wait=wait_none())
 
     with patch("functions.clients.aiohttp.ClientSession", return_value=session):
-        with pytest.raises(SpringPublishError):
-            await publish_without_wait(**_spring_arguments())
+        with pytest.raises(SpringSlotReplaceError):
+            await replace_without_wait(
+                base_url="https://spring.example",
+                environment="prod",
+                date="20261005",
+                restaurant="HAKSIK",
+                time="LUNCH",
+                items=[{"menuNames": ["밥"], "price": 5000, "mainMenus": []}],
+            )
 
-    assert session.post.call_count == 3
+    assert session.put.call_count == 3
 
 
 @pytest.mark.asyncio
-async def test_slack_retries_independently_without_repeating_accepted_spring_post():
+async def test_slack_retries_independently_without_repeating_accepted_slot_put():
     spring_session = _session_with_response(
-        _response(200, {"unmatchedMainMenus": []})
+        _response(
+            200,
+            {
+                "isSuccess": True,
+                "result": {
+                    "mealIds": [1],
+                    "unmatchedMainMenus": [[]],
+                    "deletedMealIds": [],
+                    "keptWithReviews": [],
+                },
+            },
+        )
     )
     with patch("functions.clients.aiohttp.ClientSession", return_value=spring_session):
-        spring_result = await publish_spring_meal(**_spring_arguments())
+        spring_result = await replace_spring_slot(
+            base_url="https://spring.example",
+            environment="prod",
+            date="20261005",
+            restaurant="HAKSIK",
+            time="LUNCH",
+            items=[{"menuNames": ["밥"], "price": 5000, "mainMenus": []}],
+        )
 
     slack_session = _session_with_response(_response(500, "failed"))
     slack_without_wait = cast(Any, send_slack_text).retry_with(wait=wait_none())
@@ -147,8 +119,8 @@ async def test_slack_retries_independently_without_repeating_accepted_spring_pos
                 text="publication accepted",
             )
 
-    assert spring_result.accepted is True
-    assert spring_session.post.call_count == 1
+    assert spring_result.meal_ids == (1,)
+    assert spring_session.put.call_count == 1
     assert slack_session.post.call_count == 3
     assert slack_session.post.call_args.kwargs["json"] == {
         "username": "학식봇",
@@ -159,7 +131,7 @@ async def test_slack_retries_independently_without_repeating_accepted_spring_pos
 
 
 def test_retry_policy_remains_three_attempts_with_two_second_waits():
-    for function in (spring_existing_meals, publish_spring_meal, send_slack_text):
+    for function in (spring_existing_meals, replace_spring_slot, send_slack_text):
         retry_policy = cast(Any, function).retry
         assert retry_policy.stop.max_attempt_number == 3
         assert retry_policy.wait.wait_fixed == 2
@@ -250,3 +222,45 @@ async def test_spring_existing_meals_returns_menu_names_in_result_order():
         )
 
     assert result == [["제육볶음", "쌀밥"], ["돈까스"]]
+
+
+@pytest.mark.asyncio
+async def test_replace_spring_slot_puts_full_ordered_slot_and_parses_result():
+    assert hasattr(clients_module, "replace_spring_slot")
+    session = _session_with_response(
+        _response(
+            200,
+            {
+                "isSuccess": True,
+                "result": {
+                    "mealIds": [11, 12],
+                    "unmatchedMainMenus": [[], [{"nameKo": "돈까스"}]],
+                    "deletedMealIds": [9],
+                    "keptWithReviews": [8],
+                },
+            },
+        )
+    )
+    items = [
+        {"menuNames": ["제육볶음"], "price": 5000, "mainMenus": None},
+        {"menuNames": ["돈까스"], "price": 5000, "mainMenus": []},
+    ]
+
+    with patch("functions.clients.aiohttp.ClientSession", return_value=session):
+        result = await clients_module.replace_spring_slot(
+            base_url="https://spring.example",
+            environment="prod",
+            date="20261005",
+            restaurant="HAKSIK",
+            time="LUNCH",
+            items=items,
+        )
+
+    session.put.assert_called_once()
+    assert session.put.call_args.args == (
+        "https://spring.example/meals/with-price/slot",
+    )
+    assert session.put.call_args.kwargs["json"] == items
+    assert result.meal_ids == (11, 12)
+    assert result.deleted_meal_ids == (9,)
+    assert result.kept_with_reviews == (8,)

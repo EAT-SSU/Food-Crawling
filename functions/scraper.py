@@ -118,11 +118,20 @@ def _normalized_text(value: str) -> str:
 _CLOSURE_SENTENCE = re.compile(
     r"((휴무|미운영)\s*(입니다|합니다)|운영하지\s*(않습니다|않음))\.?$"
 )
+_CLOSURE_KEYWORD = re.compile(r"휴무|미운영|운영하지\s*않")
+_PRICE_MARKER = re.compile(r"★[^★]*-\s*\d+(?:\.\d+)?")
 
 
 def _is_closure(value: str) -> bool:
     text = _normalized_text(value)
-    return text in _CLOSURE_MARKERS or bool(_CLOSURE_SENTENCE.search(text))
+    return (
+        text in _CLOSURE_MARKERS
+        or bool(_CLOSURE_SENTENCE.search(text))
+        or (
+            bool(_CLOSURE_KEYWORD.search(text))
+            and _PRICE_MARKER.search(text) is None
+        )
+    )
 
 
 def _is_day_closure(soup: BeautifulSoup) -> bool:

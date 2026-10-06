@@ -233,3 +233,20 @@ def test_weekly_completeness_alert_reports_secured_slots_and_missing_deadline():
         "⚠️ 주간 메뉴 확보: 10/14개 (미운영 2개)\n"
         "⚠️ 마감 시점 미확보: 2개"
     )
+
+
+def test_kept_with_reviews_warning_lists_safe_slot_and_ids():
+    text = format_slack_text(
+        {
+            "type": "kept_with_reviews",
+            "date": "20261005",
+            "restaurant": "학생식당",
+            "time": "LUNCH",
+            "meal_ids": [12, 15],
+        }
+    )
+
+    assert text == (
+        "🍽️ 학생식당 (20261005)\n"
+        "⚠️ LUNCH: 리뷰가 있어 유지된 식단 12, 15"
+    )

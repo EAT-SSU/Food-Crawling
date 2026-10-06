@@ -25,7 +25,14 @@ class _Context:
 
 @pytest.fixture(autouse=True)
 def _mock_spring_existence():
-    with patch.object(handler, "existing_meals", AsyncMock(return_value=[])):
+    with (
+        patch.object(handler, "existing_meals", AsyncMock(return_value=[])),
+        patch.object(
+            handler,
+            "_now_seoul",
+            return_value=datetime(2026, 7, 13, 8, 0, tzinfo=ZoneInfo("Asia/Seoul")),
+        ),
+    ):
         yield
 
 
@@ -58,8 +65,10 @@ def _haksik_lunch_corners(date: str) -> list[dict[str, str]]:
 
 def _accepted(unmatched=None, warnings=None):
     return SimpleNamespace(
-        accepted=True,
-        unmatched_main_menus=unmatched or [],
+        meal_ids=(),
+        unmatched_main_menus=(tuple(unmatched),) if unmatched else (),
+        deleted_meal_ids=(),
+        kept_with_reviews=(),
         warnings=warnings or [],
     )
 
@@ -122,7 +131,7 @@ def test_all_scrape_and_schedule_operations_share_one_dispatch_boundary(entry):
     with (
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
         patch.object(handler, "_week_dates", side_effect=fixed_week_dates),
         patch.object(handler.asyncio, "run", side_effect=counting_run),
@@ -134,7 +143,7 @@ def test_all_scrape_and_schedule_operations_share_one_dispatch_boundary(entry):
     assert run_count == 1
     assert slack.await_count == entry["expected_slack_count"]
     expected_environments = entry["destination_environments"]
-    actual_environments = [call.args[2] for call in publish.await_args_list]
+    actual_environments = [call.args[4] for call in publish.await_args_list]
     assert set(actual_environments) == set(expected_environments)
     assert len(actual_environments) == interpret.await_count * len(expected_environments)
 
@@ -150,7 +159,7 @@ def test_manual_delayed_schedule_uses_current_week_and_target_date_wins():
     with (
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
         patch.object(handler, "_week_dates", return_value=current),
     ):
@@ -163,7 +172,7 @@ def test_manual_delayed_schedule_uses_current_week_and_target_date_wins():
     with (
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
     ):
         handler.lambda_handler(targeted, _Context())
@@ -184,7 +193,7 @@ def test_dormitory_retry_exceptions_escape_by_identity_without_slack(retry_type)
     with (
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", AsyncMock()),
-        patch.object(handler, "publish_menu", AsyncMock()),
+        patch.object(handler, "replace_slot", AsyncMock()),
         patch.object(handler, "notify_slack", slack),
     ):
         with pytest.raises(retry_type) as raised:
@@ -217,7 +226,7 @@ def test_dormitory_critical_publication_failure_becomes_retry_without_slack():
     with (
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler(
@@ -257,7 +266,7 @@ def test_final_failure_loads_one_operation_and_calls_only_slack(monkeypatch):
         config_loader as loader,
         patch.object(handler, "scrape", AsyncMock()) as scrape,
         patch.object(handler, "interpret_menu", AsyncMock()) as interpret,
-        patch.object(handler, "publish_menu", AsyncMock()) as publish,
+        patch.object(handler, "replace_slot", AsyncMock()) as publish,
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler(event, _Context())
@@ -287,7 +296,7 @@ def test_missing_and_unknown_operations_are_deterministic_and_side_effect_free(e
     with (
         patch.object(handler, "scrape", boundaries[0]),
         patch.object(handler, "interpret_menu", boundaries[1]),
-        patch.object(handler, "publish_menu", boundaries[2]),
+        patch.object(handler, "replace_slot", boundaries[2]),
         patch.object(handler, "notify_slack", boundaries[3]),
     ):
         response = handler.lambda_handler(event, _Context())
@@ -306,7 +315,7 @@ def test_strict_ai_failure_skips_spring_and_notifies_once():
     with (
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler(
@@ -334,7 +343,7 @@ def test_unmatched_main_menus_are_warned_once_without_reposting():
     with (
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler(
@@ -396,7 +405,7 @@ def test_date_summary_maps_only_interpreted_main_menus_by_source_slot():
     with (
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler(
@@ -486,7 +495,7 @@ def test_empty_source_records_bypass_gpt_and_use_safe_summary():
     with (
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler(
@@ -517,7 +526,7 @@ def test_partial_dormitory_week_isolates_missing_date_and_processes_others():
         patch.object(handler, "_week_dates", return_value=dates),
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler({"operation": "schedule_dormitory"}, _Context())
@@ -564,7 +573,7 @@ def test_weekly_dormitory_failure_is_isolated_to_its_date():
             "interpret_menu",
             AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
         ),
-        patch.object(handler, "publish_menu", AsyncMock(return_value=_accepted())),
+        patch.object(handler, "replace_slot", AsyncMock(return_value=_accepted())),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler(
@@ -604,7 +613,7 @@ def test_complete_dormitory_week_including_closed_date_keeps_current_behavior():
         patch.object(handler, "_week_dates", return_value=dates),
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler({"operation": "schedule_dormitory"}, _Context())
@@ -647,7 +656,7 @@ def test_dormitory_closed_weekend_is_complete_without_ai_or_spring_calls():
         patch.object(handler, "_week_dates", return_value=dates),
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler({"operation": "schedule_dormitory"}, _Context())
@@ -669,7 +678,7 @@ def test_direct_dormitory_fetches_seven_dates_once_and_aggregates_weekly_respons
             "interpret_menu",
             AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
         ),
-        patch.object(handler, "publish_menu", AsyncMock(return_value=_accepted())),
+        patch.object(handler, "replace_slot", AsyncMock(return_value=_accepted())),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler(
@@ -732,7 +741,7 @@ def test_quiet_schedule_suppresses_only_date_summary_slack():
             "interpret_menu",
             AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
         ),
-        patch.object(handler, "publish_menu", AsyncMock(return_value=_accepted())),
+        patch.object(handler, "replace_slot", AsyncMock(return_value=_accepted())),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler(
@@ -753,7 +762,7 @@ def test_scheduled_menu_validation_failure_is_retryable_for_any_restaurant():
     with (
         patch.object(handler, "scrape", AsyncMock(return_value=[_raw("20260918", "HAKSIK")])),
         patch.object(handler, "interpret_menu", AsyncMock(side_effect=error)),
-        patch.object(handler, "publish_menu", AsyncMock()),
+        patch.object(handler, "replace_slot", AsyncMock()),
         patch.object(handler, "notify_slack", AsyncMock()) as slack,
     ):
         with pytest.raises(handler.RetryableMenuInterpretationError) as raised:
@@ -777,7 +786,7 @@ def test_direct_menu_validation_failure_remains_400_summary():
     with (
         patch.object(handler, "scrape", AsyncMock(return_value=[_raw("20260918", "HAKSIK")])),
         patch.object(handler, "interpret_menu", AsyncMock(side_effect=error)),
-        patch.object(handler, "publish_menu", AsyncMock()) as publish,
+        patch.object(handler, "replace_slot", AsyncMock()) as publish,
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
         response = handler.lambda_handler(
@@ -865,11 +874,7 @@ def test_scheduled_api_failure_uses_actual_restaurant_name():
             "interpret_menu",
             AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
         ),
-        patch.object(
-            handler,
-            "publish_menu",
-            AsyncMock(side_effect=[_accepted(), RuntimeError("unsafe API detail")]),
-        ),
+        patch.object(handler, "replace_slot", AsyncMock(side_effect=[_accepted(), RuntimeError("unsafe API detail")])),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
         with pytest.raises(handler.RetryableApiSendError) as raised:
@@ -913,7 +918,7 @@ def test_already_present_slot_skips_interpretation_and_post_after_scrape():
         patch.object(handler, "existing_meals", exists),
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler(
@@ -949,7 +954,7 @@ def test_scheduled_summary_is_sent_only_for_the_newly_published_date():
             "interpret_menu",
             AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
         ),
-        patch.object(handler, "publish_menu", AsyncMock(return_value=_accepted())),
+        patch.object(handler, "replace_slot", AsyncMock(return_value=_accepted())),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler(
@@ -1023,7 +1028,7 @@ def test_929_incident_reconciles_only_monday_at_0800_then_fills_rest_at_0900():
         patch.object(handler, "existing_meals", AsyncMock(side_effect=existence)),
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
     ):
         first = handler.lambda_handler(
@@ -1069,9 +1074,9 @@ def test_one_date_publication_failure_does_not_block_later_dates():
     async def existence(_config, time_slot, environment, *, target_date):
         return [["제육볶음"]] if (target_date, environment) in present else []
 
-    async def publication(_config, payload, environment):
+    async def publication(_config, target_date, _time, _items, environment):
         nonlocal failed_once
-        key = (payload["date"], environment)
+        key = (target_date, environment)
         if key == (dates[0], "prod") and not failed_once:
             failed_once = True
             raise RuntimeError("prod unavailable")
@@ -1089,7 +1094,7 @@ def test_one_date_publication_failure_does_not_block_later_dates():
             "interpret_menu",
             AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
         ),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
         with pytest.raises(handler.RetryableApiSendError):
@@ -1200,7 +1205,7 @@ def test_get_failure_blocks_post_for_manual_and_scheduled_paths(operation):
             "interpret_menu",
             AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
         ),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
         response = handler.lambda_handler(
@@ -1227,7 +1232,7 @@ def test_manual_present_slot_skips_interpretation_and_post():
             AsyncMock(return_value=[_raw("20260929", "FACULTY")]),
         ),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
         response = handler.lambda_handler(
@@ -1263,7 +1268,7 @@ def test_source_http_failure_isolated_per_date_and_later_date_publishes():
             "interpret_menu",
             AsyncMock(return_value={"menuNames": ["밥"], "mainMenus": []}),
         ),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
         response = handler.lambda_handler(
@@ -1277,7 +1282,7 @@ def test_source_http_failure_isolated_per_date_and_later_date_publishes():
 
     assert response["statusCode"] == 200
     assert scrape.await_count == 2
-    assert {call.args[1]["date"] for call in publish.await_args_list} == {dates[1]}
+    assert {call.args[1] for call in publish.await_args_list} == {dates[1]}
     assert {item["date"] for item in json.loads(response["body"])["remaining_missing"]} == {
         dates[0]
     }
@@ -1333,7 +1338,7 @@ def test_dormitory_deadline_alert_contains_only_today_missing_slots():
     assert slack.await_args is not None
     missing = slack.await_args.args[1]["remaining_missing"]
     assert {item["date"] for item in missing} == {"20260929"}
-    assert json.loads(response["body"])["completeness"]["total"] == 6
+    assert json.loads(response["body"])["completeness"]["total"] == 4
 
 
 def test_next_week_retry_crossing_midnight_sets_delayed_schedule_and_same_week():
@@ -1390,7 +1395,7 @@ def test_step_functions_retry_after_midnight_keeps_retrying_original_week():
     ],
 )
 def test_same_time_corners_publish_only_uncovered_corners(existing, expected_new):
-    date = "20261005"
+    date = "20261006"
     interpret = AsyncMock(
         side_effect=[
             {"menuNames": [f"신규메뉴{index}"], "mainMenus": []}
@@ -1404,7 +1409,7 @@ def test_same_time_corners_publish_only_uncovered_corners(existing, expected_new
         patch.object(handler, "existing_meals", AsyncMock(return_value=existing), create=True),
         patch.object(handler, "scrape", AsyncMock(return_value=_haksik_lunch_corners(date))),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", slack),
     ):
         response = handler.lambda_handler(
@@ -1417,7 +1422,7 @@ def test_same_time_corners_publish_only_uncovered_corners(existing, expected_new
         )
 
     assert interpret.await_count == expected_new
-    assert publish.await_count == expected_new * 2
+    assert publish.await_count == (2 if expected_new else 0)
     body = json.loads(response["body"])
     assert body["completeness"] == {
         "secured": 3,
@@ -1429,7 +1434,7 @@ def test_same_time_corners_publish_only_uncovered_corners(existing, expected_new
 
 
 def test_existing_raw_menu_is_not_reposted_when_fresh_llm_would_differ():
-    date = "20261005"
+    date = "20261006"
     interpret = AsyncMock(
         return_value={"menuNames": ["제육볶음 정식"], "mainMenus": []}
     )
@@ -1447,7 +1452,7 @@ def test_existing_raw_menu_is_not_reposted_when_fresh_llm_would_differ():
             AsyncMock(return_value=[_haksik_lunch_corners(date)[0]]),
         ),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
         handler.lambda_handler(
@@ -1459,7 +1464,7 @@ def test_existing_raw_menu_is_not_reposted_when_fresh_llm_would_differ():
 
 
 def test_corner_get_failure_blocks_all_posts_for_that_time():
-    date = "20261005"
+    date = "20261006"
     publish = AsyncMock()
     with (
         patch.object(
@@ -1470,7 +1475,7 @@ def test_corner_get_failure_blocks_all_posts_for_that_time():
         ),
         patch.object(handler, "scrape", AsyncMock(return_value=_haksik_lunch_corners(date))),
         patch.object(handler, "interpret_menu", AsyncMock()),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
         response = handler.lambda_handler(
@@ -1482,7 +1487,7 @@ def test_corner_get_failure_blocks_all_posts_for_that_time():
 
 
 def test_manual_target_date_uses_corner_level_existing_meal_assignment():
-    date = "20261005"
+    date = "20261006"
     interpret = AsyncMock()
     publish = AsyncMock()
     with (
@@ -1494,7 +1499,7 @@ def test_manual_target_date_uses_corner_level_existing_meal_assignment():
         ),
         patch.object(handler, "scrape", AsyncMock(return_value=_haksik_lunch_corners(date))),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
         response = handler.lambda_handler(
@@ -1507,7 +1512,7 @@ def test_manual_target_date_uses_corner_level_existing_meal_assignment():
 
 
 def test_ascii_variant_in_raw_text_still_covers_existing_korean_meal():
-    date = "20261005"
+    date = "20261006"
     raw = {
         **_raw_slot(date, "HAKSIK", "중식1"),
         "raw_text": "등촌st샤브칼국수 포자만두 미니밥 배추김치",
@@ -1526,7 +1531,7 @@ def test_ascii_variant_in_raw_text_still_covers_existing_korean_meal():
         ),
         patch.object(handler, "scrape", AsyncMock(return_value=[raw])),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
         handler.lambda_handler(
@@ -1538,7 +1543,7 @@ def test_ascii_variant_in_raw_text_still_covers_existing_korean_meal():
 
 
 def test_greedy_assignment_uses_distinct_mains_and_posts_missing_corner():
-    date = "20261005"
+    date = "20261006"
     corners = [
         {**_raw_slot(date, "HAKSIK", "중식1"), "raw_text": "제육볶음 가쓰오장국 배추김치"},
         {**_raw_slot(date, "HAKSIK", "중식2"), "raw_text": "돈까스 가쓰오장국 배추김치"},
@@ -1559,7 +1564,7 @@ def test_greedy_assignment_uses_distinct_mains_and_posts_missing_corner():
         ),
         patch.object(handler, "scrape", AsyncMock(return_value=corners)),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
         handler.lambda_handler(
@@ -1573,7 +1578,7 @@ def test_greedy_assignment_uses_distinct_mains_and_posts_missing_corner():
 
 
 def test_existing_meal_below_half_score_does_not_cover_corner():
-    date = "20261005"
+    date = "20261006"
     raw = {**_raw_slot(date, "HAKSIK", "중식1"), "raw_text": "제육볶음 쌀밥"}
     interpret = AsyncMock(return_value={"menuNames": ["제육볶음", "쌀밥"], "mainMenus": []})
     publish = AsyncMock(return_value=_accepted())
@@ -1585,7 +1590,7 @@ def test_existing_meal_below_half_score_does_not_cover_corner():
         ),
         patch.object(handler, "scrape", AsyncMock(return_value=[raw])),
         patch.object(handler, "interpret_menu", interpret),
-        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "replace_slot", publish),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
         handler.lambda_handler(
@@ -1594,3 +1599,207 @@ def test_existing_meal_below_half_score_does_not_cover_corner():
 
     interpret.assert_awaited_once()
     assert publish.await_count == 2
+
+
+def _slot_result(*, meal_ids=(1,), deleted=(), kept=(), unmatched=()):
+    return SimpleNamespace(
+        meal_ids=meal_ids,
+        unmatched_main_menus=unmatched,
+        deleted_meal_ids=deleted,
+        kept_with_reviews=kept,
+    )
+
+
+def test_fill_one_missing_corner_puts_full_slot_and_interprets_only_missing():
+    date = "20261006"
+    interpret = AsyncMock(return_value={"menuNames": ["비빔밥"], "mainMenus": []})
+    replace = AsyncMock(return_value=_slot_result(meal_ids=(1, 2, 3)))
+    existing = [["제육볶음"], ["돈까스"]]
+    with (
+        patch.object(handler, "existing_meals", AsyncMock(return_value=existing)),
+        patch.object(handler, "scrape", AsyncMock(return_value=_haksik_lunch_corners(date))),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "replace_slot", replace, create=True),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        handler.lambda_handler(
+            {"operation": "schedule_haksik", "target_date": date}, _Context()
+        )
+
+    interpret.assert_awaited_once()
+    assert replace.await_count == 2
+    for call in replace.await_args_list:
+        assert [item["menuNames"] for item in call.args[3]] == [
+            ["제육볶음"],
+            ["돈까스"],
+            ["비빔밥"],
+        ]
+        assert [item["mainMenus"] for item in call.args[3]] == [None, None, []]
+
+
+def test_fill_changed_menu_replaces_full_slot():
+    date = "20261006"
+    raw = {**_raw_slot(date, "HAKSIK", "중식1"), "raw_text": "새우볶음밥"}
+    replace = AsyncMock(return_value=_slot_result(meal_ids=(2,), deleted=(1,)))
+    with (
+        patch.object(handler, "existing_meals", AsyncMock(return_value=[["제육볶음"]])),
+        patch.object(handler, "scrape", AsyncMock(return_value=[raw])),
+        patch.object(
+            handler,
+            "interpret_menu",
+            AsyncMock(return_value={"menuNames": ["새우볶음밥"], "mainMenus": []}),
+        ),
+        patch.object(handler, "replace_slot", replace, create=True),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        handler.lambda_handler(
+            {"operation": "schedule_haksik", "target_date": date}, _Context()
+        )
+
+    assert replace.await_count == 2
+    assert replace.await_args_list[0].args[3][0]["menuNames"] == ["새우볶음밥"]
+
+
+def test_force_interprets_every_corner_once_and_reuses_for_both_environments():
+    date = "20261006"
+    interpret = AsyncMock(
+        side_effect=[
+            {"menuNames": ["제육볶음"], "mainMenus": []},
+            {"menuNames": ["돈까스"], "mainMenus": []},
+            {"menuNames": ["비빔밥"], "mainMenus": []},
+        ]
+    )
+    replace = AsyncMock(return_value=_slot_result(meal_ids=(1, 2, 3)))
+    with (
+        patch.object(
+            handler,
+            "existing_meals",
+            AsyncMock(return_value=[["제육볶음"], ["돈까스"], ["비빔밥"]]),
+        ),
+        patch.object(handler, "scrape", AsyncMock(return_value=_haksik_lunch_corners(date))),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "replace_slot", replace, create=True),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        handler.lambda_handler(
+            {
+                "operation": "schedule_haksik",
+                "target_date": date,
+                "publish_mode": "force",
+            },
+            _Context(),
+        )
+
+    assert interpret.await_count == 3
+    assert replace.await_count == 2
+    assert replace.await_args_list[0].args[3] == replace.await_args_list[1].args[3]
+
+
+def test_slot_get_failure_prevents_put_for_failed_environment():
+    date = "20261006"
+
+    async def get_existing(_config, _time, environment, **_kwargs):
+        if environment == "prod":
+            raise RuntimeError("GET failed")
+        return []
+
+    replace = AsyncMock(return_value=_slot_result())
+    with (
+        patch.object(handler, "existing_meals", AsyncMock(side_effect=get_existing)),
+        patch.object(handler, "scrape", AsyncMock(return_value=[_haksik_lunch_corners(date)[0]])),
+        patch.object(
+            handler,
+            "interpret_menu",
+            AsyncMock(return_value={"menuNames": ["제육볶음"], "mainMenus": []}),
+        ),
+        patch.object(handler, "replace_slot", replace, create=True),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        handler.lambda_handler(
+            {"operation": "schedule_haksik", "target_date": date}, _Context()
+        )
+
+    assert [call.args[4] for call in replace.await_args_list] == ["dev"]
+
+
+def test_all_expected_empty_never_puts_slot():
+    date = "20261006"
+    closed = {
+        **_raw_slot(date, "HAKSIK", "중식1"),
+        "raw_text": "미운영",
+        "outcome": "EXPECTED_EMPTY",
+        "reason_code": "CLOSED_MARKER",
+    }
+    replace = AsyncMock()
+    with (
+        patch.object(handler, "scrape", AsyncMock(return_value=[closed])),
+        patch.object(handler, "replace_slot", replace, create=True),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        handler.lambda_handler(
+            {"operation": "schedule_haksik", "target_date": date}, _Context()
+        )
+
+    replace.assert_not_awaited()
+
+
+def test_force_skips_past_date_without_llm_or_put():
+    past = "20260901"
+    interpret = AsyncMock()
+    replace = AsyncMock()
+    now = datetime(2026, 10, 5, 12, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    with (
+        patch.object(handler, "_now_seoul", return_value=now),
+        patch.object(handler, "scrape", AsyncMock(return_value=_haksik_lunch_corners(past))),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "replace_slot", replace, create=True),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        handler.lambda_handler(
+            {
+                "operation": "schedule_haksik",
+                "target_date": past,
+                "publish_mode": "force",
+            },
+            _Context(),
+        )
+
+    interpret.assert_not_awaited()
+    replace.assert_not_awaited()
+
+
+def test_kept_with_reviews_sends_slot_warning():
+    date = "20261006"
+    replace = AsyncMock(
+        return_value=_slot_result(meal_ids=(2,), deleted=(1,), kept=(99,))
+    )
+    slack = AsyncMock()
+    with (
+        patch.object(handler, "existing_meals", AsyncMock(return_value=[])),
+        patch.object(handler, "scrape", AsyncMock(return_value=[_haksik_lunch_corners(date)[0]])),
+        patch.object(
+            handler,
+            "interpret_menu",
+            AsyncMock(return_value={"menuNames": ["제육볶음"], "mainMenus": []}),
+        ),
+        patch.object(handler, "replace_slot", replace, create=True),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        handler.lambda_handler(
+            {"operation": "schedule_haksik", "target_date": date}, _Context()
+        )
+
+    warnings = [
+        call.args[1]
+        for call in slack.await_args_list
+        if call.args[1]["type"] == "kept_with_reviews"
+    ]
+    assert warnings
+    assert warnings[0]["time"] == "LUNCH"
+    assert warnings[0]["meal_ids"] == [99]
+
+
+def test_parse_event_defaults_fill_and_accepts_force_publish_mode():
+    assert handler.parse_event({})["publish_mode"] == "fill"
+    assert handler.parse_event({"publish_mode": "force"})["publish_mode"] == "force"
+    assert handler.parse_event({"publish_mode": "unsafe"})["publish_mode"] == "fill"

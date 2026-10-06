@@ -2,7 +2,9 @@ import hashlib
 import io
 import json
 import logging
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 from functions import handler
 from functions import menu_ai
@@ -87,6 +89,11 @@ def test_menu_validation_event_contains_only_safe_structured_fields():
                 ),
             ),
             patch.object(handler, "existing_meals", AsyncMock(return_value=[])),
+            patch.object(
+                handler,
+                "_now_seoul",
+                return_value=datetime(2026, 7, 13, tzinfo=ZoneInfo("Asia/Seoul")),
+            ),
             patch.object(handler, "notify_slack", AsyncMock()),
         ):
             handler.lambda_handler(
