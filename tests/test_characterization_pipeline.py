@@ -44,7 +44,7 @@ def test_restaurant_slot_time_and_price_mappings_are_frozen(restaurant):
 def test_client_retry_attempts_and_fixed_waits_are_frozen():
     retry_functions = {
         "gpt": menu_ai._request_and_parse,
-        "spring": clients.publish_spring_meal,
+        "spring": clients.replace_spring_slot,
         "slack": clients.send_slack_text,
     }
     for name, function in retry_functions.items():

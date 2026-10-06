@@ -55,4 +55,5 @@ def test_null_query_map_and_malformed_date_have_safe_defaults():
         "schedule_mode": None,
         "notify_summary": True,
         "schedule_anchor": None,
+        "publish_mode": "fill",
     }
