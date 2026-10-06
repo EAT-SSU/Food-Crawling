@@ -1504,3 +1504,93 @@ def test_manual_target_date_uses_corner_level_existing_meal_assignment():
     assert response["statusCode"] == 200
     interpret.assert_not_awaited()
     publish.assert_not_awaited()
+
+
+def test_ascii_variant_in_raw_text_still_covers_existing_korean_meal():
+    date = "20261005"
+    raw = {
+        **_raw_slot(date, "HAKSIK", "중식1"),
+        "raw_text": "등촌st샤브칼국수 포자만두 미니밥 배추김치",
+    }
+    interpret = AsyncMock()
+    publish = AsyncMock()
+    with (
+        patch.object(
+            handler,
+            "existing_meals",
+            AsyncMock(
+                return_value=[
+                    ["등촌샤브칼국수", "포자만두", "미니밥", "배추김치"]
+                ]
+            ),
+        ),
+        patch.object(handler, "scrape", AsyncMock(return_value=[raw])),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        handler.lambda_handler(
+            {"operation": "schedule_haksik", "target_date": date}, _Context()
+        )
+
+    interpret.assert_not_awaited()
+    publish.assert_not_awaited()
+
+
+def test_greedy_assignment_uses_distinct_mains_and_posts_missing_corner():
+    date = "20261005"
+    corners = [
+        {**_raw_slot(date, "HAKSIK", "중식1"), "raw_text": "제육볶음 가쓰오장국 배추김치"},
+        {**_raw_slot(date, "HAKSIK", "중식2"), "raw_text": "돈까스 가쓰오장국 배추김치"},
+        {**_raw_slot(date, "HAKSIK", "중식3"), "raw_text": "비빔밥 가쓰오장국 배추김치"},
+    ]
+    interpret = AsyncMock(return_value={"menuNames": ["비빔밥"], "mainMenus": []})
+    publish = AsyncMock(return_value=_accepted())
+    with (
+        patch.object(
+            handler,
+            "existing_meals",
+            AsyncMock(
+                return_value=[
+                    ["돈까스", "가쓰오장국", "배추김치"],
+                    ["제육볶음", "가쓰오장국", "배추김치"],
+                ]
+            ),
+        ),
+        patch.object(handler, "scrape", AsyncMock(return_value=corners)),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        handler.lambda_handler(
+            {"operation": "schedule_haksik", "target_date": date}, _Context()
+        )
+
+    interpret.assert_awaited_once()
+    assert interpret.await_args is not None
+    assert interpret.await_args.args[1]["source_slot"] == "중식3"
+    assert publish.await_count == 2
+
+
+def test_existing_meal_below_half_score_does_not_cover_corner():
+    date = "20261005"
+    raw = {**_raw_slot(date, "HAKSIK", "중식1"), "raw_text": "제육볶음 쌀밥"}
+    interpret = AsyncMock(return_value={"menuNames": ["제육볶음", "쌀밥"], "mainMenus": []})
+    publish = AsyncMock(return_value=_accepted())
+    with (
+        patch.object(
+            handler,
+            "existing_meals",
+            AsyncMock(return_value=[["제육볶음", "가쓰오장국", "배추김치"]]),
+        ),
+        patch.object(handler, "scrape", AsyncMock(return_value=[raw])),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        handler.lambda_handler(
+            {"operation": "schedule_haksik", "target_date": date}, _Context()
+        )
+
+    interpret.assert_awaited_once()
+    assert publish.await_count == 2

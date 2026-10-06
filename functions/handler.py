@@ -397,19 +397,21 @@ def _main_menus(
     return validated
 
 
-def _existing_meal_matches(menu_names: Sequence[str], raw_text: str) -> bool:
-    if not menu_names:
-        return False
-    normalized_raw = " ".join(raw_text.split()).casefold()
-    compact_raw = "".join(raw_text.split()).casefold()
-    for menu_name in menu_names:
-        normalized_name = " ".join(menu_name.split()).casefold()
-        compact_name = "".join(menu_name.split()).casefold()
-        if not normalized_name or (
-            normalized_name not in normalized_raw and compact_name not in compact_raw
-        ):
-            return False
-    return True
+def _normalized_hangul(value: str) -> str:
+    return re.sub(r"[^가-힣ㄱ-ㅎㅏ-ㅣ]", "", value)
+
+
+def _existing_meal_score(menu_names: Sequence[str], raw_text: str) -> float:
+    normalized_names = [
+        normalized
+        for menu_name in menu_names
+        if (normalized := _normalized_hangul(menu_name))
+    ]
+    if not normalized_names:
+        return 0.0
+    normalized_raw = _normalized_hangul(raw_text)
+    matched = sum(name in normalized_raw for name in normalized_names)
+    return matched / len(normalized_names)
 
 
 async def _process_source_date(
@@ -480,13 +482,58 @@ async def _process_source_date(
     critical_failures: set[str] = set()
     newly_published_dates: set[str] = set()
     environments = ("dev", "prod") if scheduled else ("dev",)
-    existing_cache: dict[tuple[str, str, str], list[list[str]]] = {}
-    assigned_existing: dict[tuple[str, str, str], set[int]] = defaultdict(set)
     blocked: set[tuple[str, str, str]] = set()
     requirements: set[tuple[str, str, str]] = set()
     covered: set[tuple[str, str, str, str]] = set()
     expected_empty: set[tuple[str, str, str]] = set()
     critical_environment = "prod" if scheduled else "dev"
+
+    corners_by_publication: dict[
+        tuple[str, str, str], list[tuple[int, tuple[str, str, str], str]]
+    ] = defaultdict(list)
+    for source_index, raw_meal in enumerate(raw_meals):
+        if raw_meal.get("outcome", "SUCCESS") != "SUCCESS":
+            continue
+        meal_date = _meal_date(raw_meal, target_date)
+        source_slot = _source_slot(raw_meal)
+        policy = _slot_policy(config, source_slot)
+        if policy is None:
+            continue
+        time_slot, _ = policy
+        requirement = (meal_date, source_slot, time_slot)
+        raw_text = raw_meal.get("raw_text", "")
+        for environment in environments:
+            corners_by_publication[(meal_date, time_slot, environment)].append(
+                (source_index, requirement, str(raw_text))
+            )
+
+    for publication_key, corners in corners_by_publication.items():
+        try:
+            meals = await existing_meals(
+                config,
+                publication_key[1],
+                publication_key[2],
+                target_date=publication_key[0],
+            )
+        except Exception:
+            blocked.add(publication_key)
+            continue
+        candidates: list[tuple[float, int, int, tuple[str, str, str]]] = []
+        for source_index, requirement, raw_text in corners:
+            for meal_index, menu_names in enumerate(meals):
+                score = _existing_meal_score(menu_names, raw_text)
+                if score >= 0.5:
+                    candidates.append(
+                        (-score, source_index, meal_index, requirement)
+                    )
+        assigned_corners: set[tuple[str, str, str]] = set()
+        assigned_meals: set[int] = set()
+        for _, _, meal_index, requirement in sorted(candidates):
+            if requirement in assigned_corners or meal_index in assigned_meals:
+                continue
+            assigned_corners.add(requirement)
+            assigned_meals.add(meal_index)
+            covered.add((*requirement, publication_key[2]))
 
     for raw_meal in raw_meals:
         meal_date = _meal_date(raw_meal, target_date)
@@ -552,30 +599,6 @@ async def _process_source_date(
         time_slot, price = policy
         requirement = (meal_date, source_slot, time_slot)
         requirements.add(requirement)
-        for environment in environments:
-            publication_key = (meal_date, time_slot, environment)
-            if publication_key not in existing_cache and publication_key not in blocked:
-                try:
-                    existing_cache[publication_key] = await existing_meals(
-                        config,
-                        time_slot,
-                        environment,
-                        target_date=meal_date,
-                    )
-                except Exception:
-                    blocked.add(publication_key)
-                    existing_cache[publication_key] = []
-            if publication_key in blocked:
-                continue
-            for index, existing_menu_names in enumerate(
-                existing_cache[publication_key]
-            ):
-                if index in assigned_existing[publication_key]:
-                    continue
-                if _existing_meal_matches(existing_menu_names, str(raw_text)):
-                    assigned_existing[publication_key].add(index)
-                    covered.add((*requirement, environment))
-                    break
         if all(
             (*requirement, environment) in covered
             for environment in environments
