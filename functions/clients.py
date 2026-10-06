@@ -1,15 +1,13 @@
 import json
 import re
 from dataclasses import dataclass
-from typing import Mapping, Optional, Sequence, Tuple
+from typing import Mapping, Sequence, Tuple
 
 import aiohttp
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
 
 _HTTP_TIMEOUT_SECONDS = 10
-_RESPONSE_PARSE_WARNING = "Spring accepted the meal but returned malformed JSON"
-
 _SAFE_EMPTY_REASONS = {
     "HOLIDAY": "휴무일",
     "WEEKEND_CLOSED": "주말 미운영",
@@ -48,8 +46,8 @@ def _safe_display(value: object) -> str | None:
     return normalized
 
 
-class SpringPublishError(RuntimeError):
-    """A Spring request failed before it was known to be accepted."""
+class SpringSlotReplaceError(RuntimeError):
+    """A Spring slot replacement failed."""
 
 
 class SpringExistenceError(RuntimeError):
@@ -129,119 +127,84 @@ async def spring_existing_meals(
 
 
 @dataclass(frozen=True)
-class SpringPublishResult:
-    accepted: bool
-    unmatched_main_menus: Tuple[Mapping[str, object], ...] = ()
-    warnings: Tuple[str, ...] = ()
+class SpringSlotReplaceResult:
+    meal_ids: Tuple[object, ...]
+    unmatched_main_menus: Tuple[Tuple[Mapping[str, object], ...], ...]
+    deleted_meal_ids: Tuple[object, ...]
+    kept_with_reviews: Tuple[object, ...]
 
 
-def _main_menu_body(
-    menu_names: Sequence[str],
-    main_menus: Optional[Sequence[Mapping[str, str]]],
-) -> list[dict[str, str]]:
-    if not main_menus:
-        return []
-
-    validated: list[dict[str, str]] = []
-    for main_menu in main_menus:
-        if set(main_menu) != {"nameKo", "nameEn"}:
-            raise ValueError("mainMenus entries require only nameKo and nameEn")
-        name_ko = main_menu["nameKo"]
-        name_en = main_menu["nameEn"]
-        if (
-            not isinstance(name_ko, str)
-            or not name_ko
-            or name_ko not in menu_names
-            or not isinstance(name_en, str)
-            or not name_en.strip()
-        ):
-            raise ValueError("mainMenus entries must be validated and non-empty")
-        validated.append({"nameKo": name_ko, "nameEn": name_en})
-    return validated
-
-
-def _parse_spring_response(body: str) -> SpringPublishResult:
-    if not body.strip():
-        return SpringPublishResult(accepted=True)
-
+def _parse_slot_replace_response(body: str) -> SpringSlotReplaceResult:
     try:
         decoded = json.loads(body)
-    except (TypeError, ValueError):
-        return SpringPublishResult(
-            accepted=True,
-            warnings=(_RESPONSE_PARSE_WARNING,),
-        )
-
-    if not isinstance(decoded, dict):
-        return SpringPublishResult(
-            accepted=True,
-            warnings=(_RESPONSE_PARSE_WARNING,),
-        )
-
-    unmatched = decoded.get("unmatchedMainMenus", [])
-    if not isinstance(unmatched, list) or not all(
-        isinstance(entry, dict) for entry in unmatched
-    ):
-        return SpringPublishResult(
-            accepted=True,
-            warnings=(_RESPONSE_PARSE_WARNING,),
-        )
-
-    return SpringPublishResult(
-        accepted=True,
-        unmatched_main_menus=tuple(unmatched),
+        result = decoded["result"]
+        meal_ids = result["mealIds"]
+        unmatched = result["unmatchedMainMenus"]
+        deleted = result["deletedMealIds"]
+        kept = result["keptWithReviews"]
+        if (
+            decoded.get("isSuccess") is not True
+            or not isinstance(result, dict)
+            or not isinstance(meal_ids, list)
+            or not isinstance(unmatched, list)
+            or not all(
+                isinstance(items, list)
+                and all(isinstance(item, dict) for item in items)
+                for items in unmatched
+            )
+            or not isinstance(deleted, list)
+            or not isinstance(kept, list)
+        ):
+            raise ValueError("invalid response")
+    except (KeyError, TypeError, ValueError) as error:
+        raise SpringSlotReplaceError("Spring slot replacement failed") from error
+    return SpringSlotReplaceResult(
+        meal_ids=tuple(meal_ids),
+        unmatched_main_menus=tuple(tuple(items) for items in unmatched),
+        deleted_meal_ids=tuple(deleted),
+        kept_with_reviews=tuple(kept),
     )
 
 
 @retry(
-    retry=retry_if_exception_type(SpringPublishError),
+    retry=retry_if_exception_type(SpringSlotReplaceError),
     stop=stop_after_attempt(3),
     wait=wait_fixed(2),
     reraise=True,
 )
-async def publish_spring_meal(
+async def replace_spring_slot(
     *,
     base_url: str,
     environment: str,
     date: str,
     restaurant: str,
     time: str,
-    menu_names: Sequence[str],
-    price: int,
-    main_menus: Optional[Sequence[Mapping[str, str]]] = None,
-) -> SpringPublishResult:
-    body: dict[str, object] = {
-        "price": price,
-        "menuNames": list(menu_names),
-    }
-    validated_main_menus = _main_menu_body(menu_names, main_menus)
-    if validated_main_menus:
-        body["mainMenus"] = validated_main_menus
-
-    url = f"{base_url.rstrip('/')}/meals/with-price"
+    items: Sequence[Mapping[str, object]],
+) -> SpringSlotReplaceResult:
+    url = f"{base_url.rstrip('/')}/meals/with-price/slot"
     params = {"date": date, "restaurant": restaurant, "time": time}
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(
+            async with session.put(
                 url,
-                json=body,
+                json=list(items),
                 params=params,
                 timeout=aiohttp.ClientTimeout(total=_HTTP_TIMEOUT_SECONDS),
             ) as response:
                 if response.status < 200 or response.status >= 300:
-                    raise SpringPublishError(
-                        f"Spring {environment} meal publication failed"
+                    raise SpringSlotReplaceError(
+                        f"Spring {environment} slot replacement failed"
                     )
                 response_body = await response.text()
-    except SpringPublishError:
+    except SpringSlotReplaceError:
         raise
     except Exception as error:
-        raise SpringPublishError(
-            f"Spring {environment} meal publication failed"
+        raise SpringSlotReplaceError(
+            f"Spring {environment} slot replacement failed"
         ) from error
 
-    return _parse_spring_response(response_body)
+    return _parse_slot_replace_response(response_body)
 
 
 @retry(
@@ -320,6 +283,18 @@ def format_slack_text(notification: Mapping[str, object]) -> str:
             f"{header}\n"
             f"⚠️ 주간 메뉴 확보: {secured}/{total}개 (미운영 {expected_empty}개)\n"
             f"⚠️ 마감 시점 미확보: {missing_count}개"
+        )
+    if notification_type == "kept_with_reviews":
+        time_slot = _safe_display(notification.get("time")) or "시간대"
+        raw_ids = notification.get("meal_ids")
+        meal_ids = (
+            [str(meal_id) for meal_id in raw_ids if isinstance(meal_id, (int, str))]
+            if isinstance(raw_ids, list)
+            else []
+        )
+        return (
+            f"{header}\n"
+            f"⚠️ {time_slot}: 리뷰가 있어 유지된 식단 {', '.join(meal_ids)}"
         )
     menus = notification.get("menus")
     main_menus = notification.get("main_menus")
