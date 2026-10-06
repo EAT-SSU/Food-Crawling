@@ -86,6 +86,7 @@ def test_menu_validation_event_contains_only_safe_structured_fields():
                     )
                 ),
             ),
+            patch.object(handler, "existing_meals", AsyncMock(return_value=[])),
             patch.object(handler, "notify_slack", AsyncMock()),
         ):
             handler.lambda_handler(
