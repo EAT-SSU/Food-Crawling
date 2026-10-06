@@ -235,6 +235,26 @@ def test_soongguri_sentence_style_closure_notice_is_expected_empty(notice):
     assert records[0].reason_code == "CLOSED_MARKER"
 
 
+@pytest.mark.parametrize(
+    "notice",
+    [
+        "개교기념일 행사 로 웰빙 코너 운영하지 않습니다.",
+        "개교기념일 행사 로 웰빙 코너 운영하지 않음",
+    ],
+)
+def test_soongguri_operating_denial_sentence_is_expected_empty(notice):
+    records = parse_soongguri_html(
+        "<table>"
+        f'<tr><td class="menu_nm">중식4</td><td>{notice}</td></tr>'
+        "</table>",
+        "20261010",
+        "DODAM",
+    )
+
+    assert records[0].outcome == EXPECTED_EMPTY
+    assert records[0].reason_code == "CLOSED_MARKER"
+
+
 def test_soongguri_menu_with_embedded_closure_words_remains_success():
     records = parse_soongguri_html(
         "<table>"
