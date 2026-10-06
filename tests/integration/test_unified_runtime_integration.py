@@ -1,9 +1,11 @@
 import io
 import json
 import logging
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 from tenacity import wait_none
 
@@ -53,6 +55,7 @@ def _client_session(response_text="", status=200):
     response = _AsyncResponse(status=status, text=response_text)
     session.get.return_value = response
     session.post.return_value = response
+    session.put.return_value = response
     return session
 
 
@@ -81,13 +84,19 @@ def test_unified_handler_integrates_real_wave2_modules_at_external_boundaries():
     existence_sessions = [
         _client_session('{"isSuccess": true, "result": []}')
     ]
-    spring_session = _client_session('{"unmatchedMainMenus": []}')
+    spring_session = _client_session(
+        '{"isSuccess":true,"result":{"mealIds":[1],"unmatchedMainMenus":[[]],"deletedMealIds":[],"keptWithReviews":[]}}'
+    )
     slack_session = _client_session()
     openai_client = MagicMock()
     openai_client.chat.completions.create = AsyncMock(return_value=_tool_response())
 
     with (
         patch("functions.menu_ai.AsyncOpenAI", return_value=openai_client),
+        patch(
+            "functions.handler._now_seoul",
+            return_value=datetime(2026, 7, 13, tzinfo=ZoneInfo("Asia/Seoul")),
+        ),
         patch(
             "functions.clients.aiohttp.ClientSession",
             side_effect=[
@@ -108,14 +117,16 @@ def test_unified_handler_integrates_real_wave2_modules_at_external_boundaries():
         (("http://m.soongguri.com/m_req/m_menu.php?rcd=2&sdt=20260713",), {})
     ]
     openai_client.chat.completions.create.assert_awaited_once()
-    assert spring_session.post.call_args.args == (
-        "https://dev-api.example/meals/with-price",
+    assert spring_session.put.call_args.args == (
+        "https://dev-api.example/meals/with-price/slot",
     )
-    assert spring_session.post.call_args.kwargs["json"] == {
-        "price": 6000,
-        "menuNames": ["제육볶음"],
-        "mainMenus": [{"nameKo": "제육볶음", "nameEn": "Spicy Pork"}],
-    }
+    assert spring_session.put.call_args.kwargs["json"] == [
+        {
+            "price": 6000,
+            "menuNames": ["제육볶음"],
+            "mainMenus": [{"nameKo": "제육볶음", "nameEn": "Spicy Pork"}],
+        }
+    ]
     slack_text = slack_session.post.call_args.kwargs["json"]["text"]
     assert slack_text == (
         "🍽️ 도담식당 (20260713)\n"
@@ -137,7 +148,9 @@ def test_accepted_spring_is_not_replayed_when_slack_retries_exhaust(monkeypatch)
     existence_sessions = [
         _client_session('{"isSuccess": true, "result": []}')
     ]
-    spring_session = _client_session('{"unmatchedMainMenus": []}')
+    spring_session = _client_session(
+        '{"isSuccess":true,"result":{"mealIds":[1],"unmatchedMainMenus":[[]],"deletedMealIds":[],"keptWithReviews":[]}}'
+    )
     slack_sessions = [_client_session("provider secret", status=500) for _ in range(3)]
     openai_client = MagicMock()
     openai_client.chat.completions.create = AsyncMock(return_value=_tool_response())
@@ -153,6 +166,10 @@ def test_accepted_spring_is_not_replayed_when_slack_retries_exhaust(monkeypatch)
     try:
         with (
             patch("functions.menu_ai.AsyncOpenAI", return_value=openai_client),
+            patch(
+                "functions.handler._now_seoul",
+                return_value=datetime(2026, 7, 13, tzinfo=ZoneInfo("Asia/Seoul")),
+            ),
             patch("functions.clients.send_slack_text", fast_slack),
             patch(
                 "functions.clients.aiohttp.ClientSession",
@@ -174,7 +191,7 @@ def test_accepted_spring_is_not_replayed_when_slack_retries_exhaust(monkeypatch)
 
     assert response["statusCode"] == 200
     assert json.loads(response["body"])["success"] is True
-    spring_session.post.assert_called_once()
+    spring_session.put.assert_called_once()
     assert sum(session.post.call_count for session in slack_sessions) == 3
     observation = observation_stream.getvalue()
     assert '"event.name":"notification.failed"' in observation
