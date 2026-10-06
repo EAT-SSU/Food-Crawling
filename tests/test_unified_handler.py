@@ -25,7 +25,7 @@ class _Context:
 
 @pytest.fixture(autouse=True)
 def _mock_spring_existence():
-    with patch.object(handler, "meal_exists", AsyncMock(return_value=False)):
+    with patch.object(handler, "existing_meals", AsyncMock(return_value=[])):
         yield
 
 
@@ -48,6 +48,14 @@ def _complete_raw(date: str, restaurant: str) -> list[dict[str, str]]:
     return [_raw_slot(date, restaurant, slot) for slot in slots]
 
 
+def _haksik_lunch_corners(date: str) -> list[dict[str, str]]:
+    return [
+        {**_raw_slot(date, "HAKSIK", "중식1"), "raw_text": "제육볶음 쌀밥"},
+        {**_raw_slot(date, "HAKSIK", "중식2"), "raw_text": "돈까스 샐러드"},
+        {**_raw_slot(date, "HAKSIK", "중식3"), "raw_text": "비빔밥 국"},
+    ]
+
+
 def _accepted(unmatched=None, warnings=None):
     return SimpleNamespace(
         accepted=True,
@@ -59,9 +67,15 @@ def _accepted(unmatched=None, warnings=None):
 def _dependencies(entry):
     restaurant = entry["restaurant"]
     dates = entry.get("result_dates", entry.get("current_dates", [entry.get("expected_date", "20260713")]))
-    if restaurant == "DORMITORY":
+    if restaurant == "DORMITORY" and entry["kind"] == "scrape":
         scrape = AsyncMock(
             return_value=[record for date in dates for record in _complete_raw(date, restaurant)]
+        )
+    elif restaurant == "DORMITORY":
+        scrape = AsyncMock(
+            side_effect=lambda _config, target_date, **_kwargs: _complete_raw(
+                target_date, restaurant
+            )
         )
     else:
         scrape = AsyncMock(
@@ -216,7 +230,12 @@ def test_dormitory_critical_publication_failure_becomes_retry_without_slack():
         )
 
     assert json.loads(response["body"])["remaining_missing"] == [
-        {"date": "20260713", "time": "LUNCH", "environments": ["prod"]}
+        {
+            "date": "20260713",
+            "slot": "중식1",
+            "time": "LUNCH",
+            "environments": ["prod"],
+        }
     ]
     slack.assert_not_awaited()
 
@@ -883,15 +902,15 @@ def test_notify_summary_false_does_not_suppress_final_failure_slack():
     slack.assert_awaited_once()
 
 
-def test_already_present_slot_skips_scrape_interpretation_and_post():
-    exists = AsyncMock(return_value=True)
-    scrape = AsyncMock()
+def test_already_present_slot_skips_interpretation_and_post_after_scrape():
+    exists = AsyncMock(return_value=[["제육볶음"]])
+    scrape = AsyncMock(return_value=[_raw("20260929", "FACULTY")])
     interpret = AsyncMock()
     publish = AsyncMock()
     slack = AsyncMock()
 
     with (
-        patch.object(handler, "meal_exists", exists),
+        patch.object(handler, "existing_meals", exists),
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
         patch.object(handler, "publish_menu", publish),
@@ -903,7 +922,7 @@ def test_already_present_slot_skips_scrape_interpretation_and_post():
         )
 
     assert response["statusCode"] == 200
-    scrape.assert_not_awaited()
+    scrape.assert_awaited_once()
     interpret.assert_not_awaited()
     publish.assert_not_awaited()
     slack.assert_not_awaited()
@@ -914,7 +933,7 @@ def test_scheduled_summary_is_sent_only_for_the_newly_published_date():
     dates = ["20260928", "20260929"]
 
     async def existence(_config, _time, _environment, *, target_date):
-        return target_date == dates[0]
+        return [["제육볶음"]] if target_date == dates[0] else []
 
     scrape = AsyncMock(
         side_effect=lambda _config, target_date: [_raw(target_date, "FACULTY")]
@@ -923,7 +942,7 @@ def test_scheduled_summary_is_sent_only_for_the_newly_published_date():
 
     with (
         patch.object(handler, "_week_dates", return_value=dates),
-        patch.object(handler, "meal_exists", AsyncMock(side_effect=existence)),
+        patch.object(handler, "existing_meals", AsyncMock(side_effect=existence)),
         patch.object(handler, "scrape", scrape),
         patch.object(
             handler,
@@ -939,18 +958,25 @@ def test_scheduled_summary_is_sent_only_for_the_newly_published_date():
         )
 
     assert response["statusCode"] == 200
-    scrape.assert_awaited_once()
-    assert scrape.await_args is not None
-    assert scrape.await_args.args[1] == dates[1]
+    assert [call.args[1] for call in scrape.await_args_list] == dates
     assert _date_summary_dates(slack) == [dates[1]]
 
 
 def test_haksik_existence_check_uses_configured_morning_time_for_dinner_slot():
-    exists = AsyncMock(return_value=True)
+    exists = AsyncMock(return_value=[["제육볶음"]])
 
     with (
-        patch.object(handler, "meal_exists", exists),
-        patch.object(handler, "scrape", AsyncMock()),
+        patch.object(handler, "existing_meals", exists),
+        patch.object(
+            handler,
+            "scrape",
+            AsyncMock(
+                return_value=[
+                    _raw_slot("20260929", "HAKSIK", "중식1"),
+                    _raw_slot("20260929", "HAKSIK", "석식1"),
+                ]
+            ),
+        ),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
         handler.lambda_handler(
@@ -990,11 +1016,11 @@ def test_929_incident_reconciles_only_monday_at_0800_then_fills_rest_at_0900():
     run = 0
 
     async def existence(_config, _time, _environment, *, target_date):
-        return run == 1 and target_date == dates[0]
+        return [["제육볶음"]] if run == 1 and target_date == dates[0] else []
 
     with (
         patch.object(handler, "_week_dates", return_value=dates),
-        patch.object(handler, "meal_exists", AsyncMock(side_effect=existence)),
+        patch.object(handler, "existing_meals", AsyncMock(side_effect=existence)),
         patch.object(handler, "scrape", scrape),
         patch.object(handler, "interpret_menu", interpret),
         patch.object(handler, "publish_menu", publish),
@@ -1019,7 +1045,7 @@ def test_929_incident_reconciles_only_monday_at_0800_then_fills_rest_at_0900():
         )
 
     assert first["statusCode"] == second["statusCode"] == 200
-    assert scrape.await_count == 13
+    assert scrape.await_count == 14
     assert all(call.kwargs["requested_dates"] == [call.args[1]] for call in scrape.await_args_list)
     assert publish.await_count == 28
     assert interpret.await_count == 14
@@ -1041,7 +1067,7 @@ def test_one_date_publication_failure_does_not_block_later_dates():
     )
 
     async def existence(_config, time_slot, environment, *, target_date):
-        return (target_date, environment) in present
+        return [["제육볶음"]] if (target_date, environment) in present else []
 
     async def publication(_config, payload, environment):
         nonlocal failed_once
@@ -1056,7 +1082,7 @@ def test_one_date_publication_failure_does_not_block_later_dates():
 
     with (
         patch.object(handler, "_week_dates", return_value=dates),
-        patch.object(handler, "meal_exists", AsyncMock(side_effect=existence)),
+        patch.object(handler, "existing_meals", AsyncMock(side_effect=existence)),
         patch.object(handler, "scrape", scrape),
         patch.object(
             handler,
@@ -1086,7 +1112,7 @@ def test_one_date_publication_failure_does_not_block_later_dates():
             _Context(),
         )
 
-    assert [call.args[1] for call in scrape.await_args_list] == [*dates, dates[0]]
+    assert [call.args[1] for call in scrape.await_args_list] == [*dates, *dates]
     assert publish.await_count == 5
     assert json.loads(retry["body"])["remaining_missing"] == []
 
@@ -1111,7 +1137,7 @@ def test_general_restaurant_alerts_only_when_retry_cap_is_exhausted(
         )
 
     with (
-        patch.object(handler, "meal_exists", AsyncMock(return_value=False)),
+        patch.object(handler, "existing_meals", AsyncMock(return_value=[])),
         patch.object(handler, "scrape", AsyncMock(return_value=[])),
         patch.object(handler, "notify_slack", slack),
     ):
@@ -1139,7 +1165,7 @@ def test_dormitory_missing_slots_alert_only_on_deadline(notify_summary):
             "_now_seoul",
             return_value=datetime(2026, 9, 28, 16, 5, tzinfo=ZoneInfo("Asia/Seoul")),
         ),
-        patch.object(handler, "meal_exists", AsyncMock(return_value=False)),
+        patch.object(handler, "existing_meals", AsyncMock(return_value=[])),
         patch.object(handler, "scrape", AsyncMock(return_value=[])),
         patch.object(handler, "notify_slack", slack),
     ):
@@ -1163,7 +1189,7 @@ def test_dormitory_missing_slots_alert_only_on_deadline(notify_summary):
 def test_get_failure_blocks_post_for_manual_and_scheduled_paths(operation):
     publish = AsyncMock()
     with (
-        patch.object(handler, "meal_exists", AsyncMock(side_effect=RuntimeError("GET failed"))),
+        patch.object(handler, "existing_meals", AsyncMock(side_effect=RuntimeError("GET failed"))),
         patch.object(
             handler,
             "scrape",
@@ -1194,7 +1220,7 @@ def test_manual_present_slot_skips_interpretation_and_post():
     interpret = AsyncMock()
     publish = AsyncMock()
     with (
-        patch.object(handler, "meal_exists", AsyncMock(return_value=True)),
+        patch.object(handler, "existing_meals", AsyncMock(return_value=[["제육볶음"]])),
         patch.object(
             handler,
             "scrape",
@@ -1230,7 +1256,7 @@ def test_source_http_failure_isolated_per_date_and_later_date_publishes():
             "_now_seoul",
             return_value=datetime(2026, 9, 28, 16, 5, tzinfo=ZoneInfo("Asia/Seoul")),
         ),
-        patch.object(handler, "meal_exists", AsyncMock(return_value=False)),
+        patch.object(handler, "existing_meals", AsyncMock(return_value=[])),
         patch.object(handler, "scrape", scrape),
         patch.object(
             handler,
@@ -1265,7 +1291,7 @@ def test_recovery_and_dormitory_missing_slots_do_not_raise_retryable(
     operation, schedule_mode
 ):
     with (
-        patch.object(handler, "meal_exists", AsyncMock(return_value=False)),
+        patch.object(handler, "existing_meals", AsyncMock(return_value=[])),
         patch.object(handler, "scrape", AsyncMock(return_value=[])),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
@@ -1289,7 +1315,7 @@ def test_dormitory_deadline_alert_contains_only_today_missing_slots():
     with (
         patch.object(handler, "_now_seoul", return_value=fixed_now),
         patch.object(handler, "_week_dates", return_value=dates),
-        patch.object(handler, "meal_exists", AsyncMock(return_value=False)),
+        patch.object(handler, "existing_meals", AsyncMock(return_value=[])),
         patch.object(handler, "scrape", AsyncMock(return_value=[])),
         patch.object(handler, "notify_slack", slack),
     ):
@@ -1334,7 +1360,7 @@ def test_step_functions_retry_after_midnight_keeps_retrying_original_week():
     monday = datetime(2026, 9, 21, 0, 5, tzinfo=ZoneInfo("Asia/Seoul"))
     with (
         patch.object(handler, "_now_seoul", return_value=monday),
-        patch.object(handler, "meal_exists", AsyncMock(return_value=False)),
+        patch.object(handler, "existing_meals", AsyncMock(return_value=[])),
         patch.object(handler, "scrape", AsyncMock(return_value=[])),
         patch.object(handler, "notify_slack", AsyncMock()),
     ):
@@ -1353,3 +1379,128 @@ def test_step_functions_retry_after_midnight_keeps_retrying_original_week():
             )
 
     assert raised.value.target_date == "20260921"
+
+
+@pytest.mark.parametrize(
+    ("existing", "expected_new"),
+    [
+        ([], 3),
+        ([['제육볶음', '쌀밥']], 2),
+        ([['제육볶음'], ['돈까스'], ['비빔밥']], 0),
+    ],
+)
+def test_same_time_corners_publish_only_uncovered_corners(existing, expected_new):
+    date = "20261005"
+    interpret = AsyncMock(
+        side_effect=[
+            {"menuNames": [f"신규메뉴{index}"], "mainMenus": []}
+            for index in range(expected_new)
+        ]
+    )
+    publish = AsyncMock(return_value=_accepted())
+    slack = AsyncMock()
+
+    with (
+        patch.object(handler, "existing_meals", AsyncMock(return_value=existing), create=True),
+        patch.object(handler, "scrape", AsyncMock(return_value=_haksik_lunch_corners(date))),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", slack),
+    ):
+        response = handler.lambda_handler(
+            {
+                "operation": "schedule_haksik",
+                "target_date": date,
+                "schedule_mode": "remaining_week",
+            },
+            _Context(),
+        )
+
+    assert interpret.await_count == expected_new
+    assert publish.await_count == expected_new * 2
+    body = json.loads(response["body"])
+    assert body["completeness"] == {
+        "secured": 3,
+        "total": 3,
+        "expected_empty": 0,
+    }
+    assert body["remaining_missing"] == []
+    assert _date_summary_dates(slack) == ([date] if expected_new else [])
+
+
+def test_existing_raw_menu_is_not_reposted_when_fresh_llm_would_differ():
+    date = "20261005"
+    interpret = AsyncMock(
+        return_value={"menuNames": ["제육볶음 정식"], "mainMenus": []}
+    )
+    publish = AsyncMock()
+    with (
+        patch.object(
+            handler,
+            "existing_meals",
+            AsyncMock(return_value=[["제육볶음", "쌀밥"]]),
+            create=True,
+        ),
+        patch.object(
+            handler,
+            "scrape",
+            AsyncMock(return_value=[_haksik_lunch_corners(date)[0]]),
+        ),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        handler.lambda_handler(
+            {"operation": "schedule_haksik", "target_date": date}, _Context()
+        )
+
+    interpret.assert_not_awaited()
+    publish.assert_not_awaited()
+
+
+def test_corner_get_failure_blocks_all_posts_for_that_time():
+    date = "20261005"
+    publish = AsyncMock()
+    with (
+        patch.object(
+            handler,
+            "existing_meals",
+            AsyncMock(side_effect=RuntimeError("GET failed")),
+            create=True,
+        ),
+        patch.object(handler, "scrape", AsyncMock(return_value=_haksik_lunch_corners(date))),
+        patch.object(handler, "interpret_menu", AsyncMock()),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        response = handler.lambda_handler(
+            {"operation": "schedule_haksik", "target_date": date}, _Context()
+        )
+
+    publish.assert_not_awaited()
+    assert len(json.loads(response["body"])["remaining_missing"]) == 3
+
+
+def test_manual_target_date_uses_corner_level_existing_meal_assignment():
+    date = "20261005"
+    interpret = AsyncMock()
+    publish = AsyncMock()
+    with (
+        patch.object(
+            handler,
+            "existing_meals",
+            AsyncMock(return_value=[["제육볶음"], ["돈까스"], ["비빔밥"]]),
+            create=True,
+        ),
+        patch.object(handler, "scrape", AsyncMock(return_value=_haksik_lunch_corners(date))),
+        patch.object(handler, "interpret_menu", interpret),
+        patch.object(handler, "publish_menu", publish),
+        patch.object(handler, "notify_slack", AsyncMock()),
+    ):
+        response = handler.lambda_handler(
+            {"operation": "scrape_haksik", "target_date": date}, _Context()
+        )
+
+    assert response["statusCode"] == 200
+    interpret.assert_not_awaited()
+    publish.assert_not_awaited()

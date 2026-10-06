@@ -233,35 +233,22 @@ async def publish_menu(
     )
 
 
-async def meal_exists(
+async def existing_meals(
     config: Mapping[str, Any],
     time_slot: str,
     environment: str,
     *,
     target_date: str,
-) -> bool:
+) -> list[list[str]]:
     module = importlib.import_module("functions.clients")
     base_url_key = "api_base_url" if environment == "prod" else "dev_api_base_url"
-    return await module.spring_meal_exists(
+    return await module.spring_existing_meals(
         base_url=config[base_url_key],
         environment=environment,
         date=target_date,
         restaurant=config["restaurant"],
         time=time_slot,
     )
-
-
-async def publish_if_missing(
-    config: Mapping[str, Any], payload: Mapping[str, Any], environment: str
-) -> Any | None:
-    if await meal_exists(
-        config,
-        str(payload["time"]),
-        environment,
-        target_date=str(payload["date"]),
-    ):
-        return None
-    return await publish_menu(config, payload, environment)
 
 
 async def notify_slack(config: Mapping[str, Any], notification: Mapping[str, Any]) -> Any:
@@ -410,6 +397,21 @@ def _main_menus(
     return validated
 
 
+def _existing_meal_matches(menu_names: Sequence[str], raw_text: str) -> bool:
+    if not menu_names:
+        return False
+    normalized_raw = " ".join(raw_text.split()).casefold()
+    compact_raw = "".join(raw_text.split()).casefold()
+    for menu_name in menu_names:
+        normalized_name = " ".join(menu_name.split()).casefold()
+        compact_name = "".join(menu_name.split()).casefold()
+        if not normalized_name or (
+            normalized_name not in normalized_raw and compact_name not in compact_raw
+        ):
+            return False
+    return True
+
+
 async def _process_source_date(
     config: Mapping[str, Any],
     target_date: str,
@@ -418,9 +420,6 @@ async def _process_source_date(
     requested_dates: Sequence[str] | None = None,
     notify_summary: bool = True,
     retry_failures: bool = True,
-    known_present: set[tuple[str, str, str]] | None = None,
-    blocked_publications: set[tuple[str, str, str]] | None = None,
-    expected_empty: set[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     workflow_retry = scheduled and retry_failures
     try:
@@ -447,13 +446,14 @@ async def _process_source_date(
                 "reason_code": reason_code,
             }
         ]
-    if scheduled and requested_dates is not None:
+    if scheduled:
+        expected_dates = list(requested_dates or [target_date])
         represented_dates = {
             meal_date
             for raw_meal in raw_meals
             if (meal_date := _date(raw_meal.get("date"))) is not None
         }
-        missing_dates = set(requested_dates) - represented_dates
+        missing_dates = set(expected_dates) - represented_dates
         if workflow_retry and missing_dates:
             raise RetryableEmptyMenuError(target_date, config["restaurant"])
         raw_meals.extend(
@@ -480,9 +480,12 @@ async def _process_source_date(
     critical_failures: set[str] = set()
     newly_published_dates: set[str] = set()
     environments = ("dev", "prod") if scheduled else ("dev",)
-    present = known_present if known_present is not None else set()
-    blocked = blocked_publications if blocked_publications is not None else set()
-    expected = expected_empty if expected_empty is not None else set()
+    existing_cache: dict[tuple[str, str, str], list[list[str]]] = {}
+    assigned_existing: dict[tuple[str, str, str], set[int]] = defaultdict(set)
+    blocked: set[tuple[str, str, str]] = set()
+    requirements: set[tuple[str, str, str]] = set()
+    covered: set[tuple[str, str, str, str]] = set()
+    expected_empty: set[tuple[str, str, str]] = set()
     critical_environment = "prod" if scheduled else "dev"
 
     for raw_meal in raw_meals:
@@ -517,8 +520,25 @@ async def _process_source_date(
                     if source_slot == "전체"
                     else (policy[0],) if policy is not None else ()
                 )
-                expected.update((meal_date, time_slot) for time_slot in empty_times)
+                for time_slot in empty_times:
+                    corner = (
+                        f"전체:{time_slot}" if source_slot == "전체" else source_slot
+                    )
+                    requirement = (meal_date, corner, time_slot)
+                    requirements.add(requirement)
+                    expected_empty.add(requirement)
             if outcome == "AMBIGUOUS_EMPTY":
+                policy = _slot_policy(config, source_slot)
+                missing_times = (
+                    _slot_times(config)
+                    if source_slot == "전체"
+                    else (policy[0],) if policy is not None else ()
+                )
+                for time_slot in missing_times:
+                    corner = (
+                        f"전체:{time_slot}" if source_slot == "전체" else source_slot
+                    )
+                    requirements.add((meal_date, corner, time_slot))
                 summary["errors"].append(
                     {"slot": source_slot, "stage": "source", "error_type": str(reason_code)}
                 )
@@ -530,23 +550,53 @@ async def _process_source_date(
             )
             continue
         time_slot, price = policy
-        if not scheduled:
-            for environment in environments:
-                publication_key = (meal_date, time_slot, environment)
+        requirement = (meal_date, source_slot, time_slot)
+        requirements.add(requirement)
+        for environment in environments:
+            publication_key = (meal_date, time_slot, environment)
+            if publication_key not in existing_cache and publication_key not in blocked:
                 try:
-                    if await meal_exists(
+                    existing_cache[publication_key] = await existing_meals(
                         config,
                         time_slot,
                         environment,
                         target_date=meal_date,
-                    ):
-                        present.add(publication_key)
+                    )
                 except Exception:
                     blocked.add(publication_key)
+                    existing_cache[publication_key] = []
+            if publication_key in blocked:
+                continue
+            for index, existing_menu_names in enumerate(
+                existing_cache[publication_key]
+            ):
+                if index in assigned_existing[publication_key]:
+                    continue
+                if _existing_meal_matches(existing_menu_names, str(raw_text)):
+                    assigned_existing[publication_key].add(index)
+                    covered.add((*requirement, environment))
+                    break
         if all(
-            (meal_date, time_slot, environment) in present
+            (*requirement, environment) in covered
             for environment in environments
         ):
+            continue
+        if all(
+            (meal_date, time_slot, environment) in blocked
+            for environment in environments
+        ):
+            for environment in environments:
+                summary["warnings"].append(
+                    {
+                        "slot": source_slot,
+                        "stage": "publication",
+                        "environment": environment,
+                        "reason": "existence check failed",
+                        "error_type": "SpringExistenceError",
+                    }
+                )
+                if environment == critical_environment:
+                    critical_failures.add(meal_date)
             continue
         try:
             interpreted = await interpret_menu(config, raw_meal)
@@ -620,7 +670,7 @@ async def _process_source_date(
 
         for environment in environments:
             publication_key = (meal_date, time_slot, environment)
-            if publication_key in present:
+            if (*requirement, environment) in covered:
                 continue
             if publication_key in blocked:
                 summary["warnings"].append(
@@ -636,9 +686,7 @@ async def _process_source_date(
                     critical_failures.add(meal_date)
                 continue
             try:
-                publication = await publish_if_missing(
-                    config, payload, environment
-                )
+                publication = await publish_menu(config, payload, environment)
             except (
                 RetryableEmptyMenuError,
                 RetryableApiSendError,
@@ -660,9 +708,7 @@ async def _process_source_date(
                     critical_failures.add(meal_date)
                 continue
 
-            present.add(publication_key)
-            if publication is None:
-                continue
+            covered.add((*requirement, environment))
             newly_published_dates.add(meal_date)
 
             unmatched = _result_value(publication, "unmatchedMainMenus", None)
@@ -699,6 +745,34 @@ async def _process_source_date(
         summaries[target_date]
     results: list[dict[str, Any]] = []
     for meal_date, summary in sorted(summaries.items()):
+        date_requirements = {
+            requirement
+            for requirement in requirements
+            if requirement[0] == meal_date
+        }
+        date_expected_empty = date_requirements & expected_empty
+        remaining_corners: list[dict[str, Any]] = []
+        secured_corners = 0
+        for requirement in sorted(date_requirements):
+            if requirement in date_expected_empty:
+                secured_corners += 1
+                continue
+            missing_environments = [
+                environment
+                for environment in environments
+                if (*requirement, environment) not in covered
+            ]
+            if missing_environments:
+                remaining_corners.append(
+                    {
+                        "date": requirement[0],
+                        "slot": requirement[1],
+                        "time": requirement[2],
+                        "environments": missing_environments,
+                    }
+                )
+            else:
+                secured_corners += 1
         notification = {
             "type": "date_summary",
             "date": meal_date,
@@ -729,7 +803,11 @@ async def _process_source_date(
                 "date": meal_date,
                 "restaurant": config["name_ko"],
                 "menus": summary["menus"],
-                "success": not summary["errors"] and meal_date not in critical_failures,
+                "success": (
+                    not summary["errors"]
+                    and meal_date not in critical_failures
+                    and not remaining_corners
+                ),
                 "error_slots": {
                     item["slot"]: item["error_type"] for item in summary["errors"]
                 },
@@ -739,6 +817,10 @@ async def _process_source_date(
                     if item.get("reason_code")
                 ],
                 "warnings": summary["warnings"],
+                "corner_total": len(date_requirements),
+                "secured_corners": secured_corners,
+                "expected_empty_corners": len(date_expected_empty),
+                "remaining_corners": remaining_corners,
             }
         )
     return results
@@ -816,38 +898,8 @@ async def _run_schedule(
     del event
     dates = _dates_for(config, request)
     environments = ("dev", "prod")
-    required_times = _slot_times(config)
-    known_present: set[tuple[str, str, str]] = set()
-    blocked_publications: set[tuple[str, str, str]] = set()
-    expected_empty: set[tuple[str, str]] = set()
-
-    for target_date in dates:
-        for time_slot in required_times:
-            for environment in environments:
-                try:
-                    if await meal_exists(
-                        config,
-                        time_slot,
-                        environment,
-                        target_date=target_date,
-                    ):
-                        known_present.add((target_date, time_slot, environment))
-                except Exception:
-                    blocked_publications.add((target_date, time_slot, environment))
-
-    dates_to_scrape = [
-        target_date
-        for target_date in dates
-        if any(
-            not all(
-                (target_date, time_slot, environment) in known_present
-                for environment in environments
-            )
-            for time_slot in required_times
-        )
-    ]
     results: list[dict[str, Any]] = []
-    for target_date in dates_to_scrape:
+    for target_date in dates:
         try:
             results.extend(
                 await _process_source_date(
@@ -861,9 +913,6 @@ async def _run_schedule(
                     ),
                     notify_summary=request["notify_summary"],
                     retry_failures=False,
-                    known_present=known_present,
-                    blocked_publications=blocked_publications,
-                    expected_empty=expected_empty,
                 )
             )
         except (
@@ -875,6 +924,15 @@ async def _run_schedule(
         except Exception as error:
             if getattr(error, "outcome", None) != "API_FAILURE":
                 raise
+            missing_corners = [
+                {
+                    "date": target_date,
+                    "slot": f"전체:{time_slot}",
+                    "time": time_slot,
+                    "environments": list(environments),
+                }
+                for time_slot in _slot_times(config)
+            ]
             results.append(
                 {
                     "date": target_date,
@@ -890,38 +948,25 @@ async def _run_schedule(
                             "error_type": type(error).__name__,
                         }
                     ],
+                    "corner_total": len(missing_corners),
+                    "secured_corners": 0,
+                    "expected_empty_corners": 0,
+                    "remaining_corners": missing_corners,
                 }
             )
 
-    remaining_missing: list[dict[str, Any]] = []
-    secured = 0
-    expected_empty_count = 0
-    for target_date in dates:
-        for time_slot in required_times:
-            if (target_date, time_slot) in expected_empty:
-                expected_empty_count += 1
-                secured += 1
-                continue
-            missing_environments = [
-                environment
-                for environment in environments
-                if (target_date, time_slot, environment) not in known_present
-            ]
-            if missing_environments:
-                remaining_missing.append(
-                    {
-                        "date": target_date,
-                        "time": time_slot,
-                        "environments": missing_environments,
-                    }
-                )
-            else:
-                secured += 1
+    remaining_missing = [
+        corner
+        for result in results
+        for corner in result.get("remaining_corners", [])
+    ]
 
     completeness = {
-        "secured": secured,
-        "total": len(dates) * len(required_times),
-        "expected_empty": expected_empty_count,
+        "secured": sum(result.get("secured_corners", 0) for result in results),
+        "total": sum(result.get("corner_total", 0) for result in results),
+        "expected_empty": sum(
+            result.get("expected_empty_corners", 0) for result in results
+        ),
     }
     body = {
         "results": results,
@@ -966,7 +1011,7 @@ async def _run_schedule(
             )
         return _response(200, body)
 
-    has_publication_failure = bool(blocked_publications) or any(
+    has_publication_failure = any(
         any(
             warning.get("stage") == "publication"
             for warning in result.get("warnings", [])
