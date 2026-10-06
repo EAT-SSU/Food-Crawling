@@ -15,10 +15,12 @@
 
 ## 2. Spring API
 
-- `POST /meals/with-price`는 같은 시간대에 메뉴 이름 목록(정렬 후)이 정확히 같은 식단이 있으면 기존 `mealId`를 돌려준다. 이름이 조금이라도 다르면 새 식단이 생긴다(LLM 출력 차이).
 - 조회: `GET {base}/meals?date=YYYYMMDD&restaurant=CODE&time=TIME&language=KO`. 인증이 필요 없다. `result`는 식단 목록이다.
-- POST 전에는 반드시 GET으로 확인한다. GET이 실패하면 POST하지 않는다.
-- prod는 `https://eat-ssu.tech`, dev는 `https://dev.eat-ssu.tech`다. 한 스택이 두 곳 모두에 POST한다.
+- 발행: `PUT {base}/meals/with-price/slot?date=YYYYMMDD&restaurant=CODE&time=TIME`. 요청 본문은 해당 시간대의 전체 코너 배열이다.
+- PUT은 요청과 같은 메뉴 이름 목록의 기존 식단을 유지하고 가격과 대표 메뉴를 갱신한다. 요청에서 빠진 식단은 삭제하지만 리뷰가 있으면 유지한다.
+- PUT 전에는 반드시 GET으로 기존 식단을 확인한다. GET이 실패한 환경과 시간대에는 PUT하지 않는다.
+- 빈 배열과 중복된 메뉴 이름 목록을 PUT하면 400 오류가 발생하므로 전송하지 않는다.
+- prod는 `https://eat-ssu.tech`, dev는 `https://dev.eat-ssu.tech`다. 한 스택이 두 곳 모두에 PUT한다.
 
 ## 3. 원본 사이트의 특이 동작
 
@@ -29,7 +31,10 @@
 ## 4. 동작을 바꿀 때 지킬 것
 
 - **요청받지 않은 동작을 끄거나 바꾸지 않는다.** 2026-10 PR #39에서 성공 Slack 알림을 임의로 꺼서, 사용자가 업로드 결과를 받지 못했다.
-- Slack 성공 요약은 새로 POST한 날짜에만 보낸다. 실패 경고(기숙사 10:00, 일요일 재시도 소진)는 유지한다.
+- Slack 성공 요약은 PUT으로 생성하거나 삭제한 식단이 있는 날짜에만 보낸다. 리뷰 때문에 삭제하지 못한 식단은 별도 경고를 보낸다. 실패 경고(기숙사 10:00, 일요일 재시도 소진)는 유지한다.
+- `publish_mode=fill`이 기본값이다. 기존 식단을 코너에 매칭하고, 누락되거나 변경된 코너만 LLM으로 해석한 뒤 시간대 전체를 PUT한다.
+- `publish_mode=force`는 모든 코너를 LLM으로 다시 해석한 뒤 시간대 전체를 PUT한다. 수동 복구에서만 명시적으로 사용한다.
+- 두 모드 모두 오늘 KST와 미래 날짜만 발행한다. 과거 날짜에는 PUT하지 않는다.
 - 스케줄 cron은 KST(`ScheduleExpressionTimezone: Asia/Seoul`) 기준이다. UTC로 읽지 않는다.
   - 기숙사: 매일 08:00, 09:00, 10:00, 이번 주 대상
   - 다른 식당: 일요일 16:00 다음 주 대상(Step Functions 재시도), 월요일부터 목요일까지 16:05 이번 주 남은 날짜 대상
@@ -59,6 +64,6 @@
 
 ## 8. 운영 작업
 
-- prod에 쓰는 수동 실행이나 직접 POST는 사용자 승인 후에만 한다. 먼저 dry-run으로 올릴 내용을 보여 준다.
-- 수동 POST 전에도 GET으로 같은 대표 메뉴가 없는지 확인한다.
+- prod에 쓰는 수동 실행이나 직접 PUT은 사용자 승인 후에만 한다. 먼저 dry-run으로 올릴 내용을 보여 준다.
+- 수동 PUT 전에도 GET으로 현재 시간대의 전체 식단을 확인한다.
 - AWS 접근: `AWS_PROFILE=eatssu`, 리전 `ap-northeast-2`.
