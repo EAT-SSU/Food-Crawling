@@ -66,14 +66,14 @@ class SlackNotificationError(RuntimeError):
     wait=wait_fixed(2),
     reraise=True,
 )
-async def spring_meal_exists(
+async def spring_existing_meals(
     *,
     base_url: str,
     environment: str,
     date: str,
     restaurant: str,
     time: str,
-) -> bool:
+) -> list[list[str]]:
     url = f"{base_url.rstrip('/')}/meals"
     params = {
         "date": date,
@@ -103,7 +103,23 @@ async def spring_meal_exists(
             raise SpringExistenceError(
                 f"Spring {environment} meal existence check failed"
             )
-        return bool(decoded["result"])
+        meals: list[list[str]] = []
+        for meal in decoded["result"]:
+            if not isinstance(meal, dict) or not isinstance(
+                meal.get("briefMenus"), list
+            ):
+                raise SpringExistenceError(
+                    f"Spring {environment} meal existence check failed"
+                )
+            names: list[str] = []
+            for menu in meal["briefMenus"]:
+                if not isinstance(menu, dict) or not isinstance(menu.get("name"), str):
+                    raise SpringExistenceError(
+                        f"Spring {environment} meal existence check failed"
+                    )
+                names.append(menu["name"])
+            meals.append(names)
+        return meals
     except SpringExistenceError:
         raise
     except Exception as error:

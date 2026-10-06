@@ -79,7 +79,7 @@ def test_unified_handler_integrates_real_wave2_modules_at_external_boundaries():
     )
     scraper_session = _ScraperSession(html)
     existence_sessions = [
-        _client_session('{"isSuccess": true, "result": []}') for _ in range(2)
+        _client_session('{"isSuccess": true, "result": []}')
     ]
     spring_session = _client_session('{"unmatchedMainMenus": []}')
     slack_session = _client_session()
@@ -135,7 +135,7 @@ def test_accepted_spring_is_not_replayed_when_slack_retries_exhaust(monkeypatch)
     )
     scraper_session = _ScraperSession(html)
     existence_sessions = [
-        _client_session('{"isSuccess": true, "result": []}') for _ in range(2)
+        _client_session('{"isSuccess": true, "result": []}')
     ]
     spring_session = _client_session('{"unmatchedMainMenus": []}')
     slack_sessions = [_client_session("provider secret", status=500) for _ in range(3)]

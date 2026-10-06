@@ -115,7 +115,9 @@ def _normalized_text(value: str) -> str:
     return " ".join(value.split())
 
 
-_CLOSURE_SENTENCE = re.compile(r"(휴무|미운영)\s*(입니다|합니다)\.?$")
+_CLOSURE_SENTENCE = re.compile(
+    r"((휴무|미운영)\s*(입니다|합니다)|운영하지\s*(않습니다|않음))\.?$"
+)
 
 
 def _is_closure(value: str) -> bool:
