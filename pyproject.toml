@@ -27,10 +27,11 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["functions"]
+packages = ["src/functions"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 markers = [
     "unit: mark a test as a unit test.",
     "integration: mark a test as an integration test.",

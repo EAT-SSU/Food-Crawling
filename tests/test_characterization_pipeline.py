@@ -4,7 +4,7 @@ from typing import Any, cast
 
 import pytest
 
-from functions import clients, handler, menu_ai, scraper
+from functions import clients, config, handler, menu_ai, scraper
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,10 +33,10 @@ def test_dormitory_source_shape_is_frozen_without_row_slicing():
 
 @pytest.mark.parametrize("restaurant", ["DODAM", "HAKSIK", "FACULTY", "DORMITORY"])
 def test_restaurant_slot_time_and_price_mappings_are_frozen(restaurant):
-    config = handler.load_operation_config(f"scrape_{restaurant.lower()}")
-    assert config is not None
+    restaurant_config = config.load_restaurant_config(restaurant)
+    assert restaurant_config is not None
     for source_slot, expected in SOURCE[restaurant]["publication"].items():
-        assert handler._slot_policy(config, source_slot) == (
+        assert handler._slot_policy(restaurant_config, source_slot) == (
             None if expected is None else (expected["time"], expected["price"])
         )
 

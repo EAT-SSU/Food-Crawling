@@ -1,9 +1,6 @@
 {
-  "httpMethod": "GET",
-  "path": "/schedule/haksik",
-  "queryStringParameters": {
-    "delayed_schedule": "false"
-  },
-  "headers": {},
-  "body": null
+  "restaurant": "HAKSIK",
+  "date": "20261102",
+  "dry_run": true,
+  "environments": ["dev"]
 }

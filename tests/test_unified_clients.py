@@ -264,3 +264,60 @@ async def test_replace_spring_slot_puts_full_ordered_slot_and_parses_result():
     assert result.meal_ids == (11, 12)
     assert result.deleted_meal_ids == (9,)
     assert result.kept_with_reviews == (8,)
+
+
+def test_date_summary_lists_corner_menus_and_representatives():
+    text = clients_module.format_slack_text(
+        {
+            "type": "date_summary",
+            "date": "20261102",
+            "restaurant": "학생식당",
+            "menus": {"중식1": ["제육볶음", "쌀밥"], "중식2": ["돈까스"]},
+            "main_menus": {
+                "중식1": [{"nameKo": "제육볶음", "nameEn": "Spicy Pork"}],
+                "중식2": [{"nameKo": "<script>", "nameEn": "x"}],
+            },
+        }
+    )
+
+    assert text == (
+        "🍽️ 학생식당 (20261102)\n"
+        "• 중식1: 제육볶음, 쌀밥\n"
+        "  ↳ 대표: 제육볶음 (Spicy Pork)\n"
+        "• 중식2: 돈까스"
+    )
+
+
+def test_kept_with_reviews_warning_lists_time_and_ids():
+    text = clients_module.format_slack_text(
+        {
+            "type": "kept_with_reviews",
+            "date": "20261102",
+            "restaurant": "도담식당",
+            "time": "LUNCH",
+            "meal_ids": [8, 9],
+        }
+    )
+
+    assert text == "🍽️ 도담식당 (20261102)\n⚠️ LUNCH: 리뷰가 있어 유지된 식단 8, 9"
+
+
+def test_missing_on_final_lists_date_time_corner_environment_without_menu_text():
+    text = clients_module.format_slack_text(
+        {
+            "type": "missing_on_final",
+            "restaurant": "기숙사식당",
+            "missing": [
+                {"date": "20261102", "time": "LUNCH", "corner": "중식", "environment": "prod"},
+                {"date": "20261102", "time": "DINNER", "corner": "제육볶음 쌀밥 김치", "environment": "prod"},
+            ],
+            "menus": {"중식": ["제육볶음"]},
+        }
+    )
+
+    assert text == (
+        "🚨 기숙사식당: 마감 시점까지 발행되지 않은 코너\n"
+        "• 20261102 LUNCH 중식 (prod)\n"
+        "• 20261102 DINNER 코너 (prod)"
+    )
+    assert "제육" not in text

@@ -1,234 +1,92 @@
 import json
+import re
 from pathlib import Path
-from typing import cast
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE_PATH = ROOT / "template.yml"
-README_PATH = ROOT / "README.md"
-MENU_ASL_PATH = ROOT / "statemachine" / "menu-retry-workflow.asl.json"
+TEMPLATE = (ROOT / "template.yml").read_text(encoding="utf-8")
 
-FUNCTION_HANDLERS = {
-    "DodamScrapingFunction": "functions.handler.lambda_handler",
-    "HaksikScrapingFunction": "functions.handler.lambda_handler",
-    "FacultyScrapingFunction": "functions.handler.lambda_handler",
-    "DormitoryScrapingFunction": "functions.handler.lambda_handler",
-    "DodamSchedulingFunction": "functions.handler.lambda_handler",
-    "HaksikSchedulingFunction": "functions.handler.lambda_handler",
-    "FacultySchedulingFunction": "functions.handler.lambda_handler",
-    "DormitorySchedulingFunction": "functions.handler.lambda_handler",
-    "NotifyFailureFunction": "functions.handler.lambda_handler",
-}
-
-FUNCTION_OPERATIONS = {
-    "DodamScrapingFunction": "scrape_dodam",
-    "HaksikScrapingFunction": "scrape_haksik",
-    "FacultyScrapingFunction": "scrape_faculty",
-    "DormitoryScrapingFunction": "scrape_dormitory",
-    "DodamSchedulingFunction": "schedule_dodam",
-    "HaksikSchedulingFunction": "schedule_haksik",
-    "FacultySchedulingFunction": "schedule_faculty",
-    "DormitorySchedulingFunction": "schedule_dormitory",
-    "NotifyFailureFunction": "notify_final_failure",
-}
-
-DIRECT_SCHEDULE_FUNCTIONS = {
-    "DodamSchedulingFunction",
-    "HaksikSchedulingFunction",
-    "FacultySchedulingFunction",
+EXPECTED_SCHEDULES = {
+    ("cron(0 8 ? * * *)", "DORMITORY", "current_week", False),
+    ("cron(0 9 ? * * *)", "DORMITORY", "current_week", False),
+    ("cron(0 10 ? * * *)", "DORMITORY", "current_week", True),
+    *(
+        schedule
+        for restaurant in ("HAKSIK", "DODAM", "FACULTY")
+        for schedule in (
+            ("cron(0 16 ? * SUN *)", restaurant, "next_week", False),
+            ("cron(0 20 ? * SUN *)", restaurant, "next_week", True),
+            ("cron(5 16 ? * MON-THU *)", restaurant, "remaining_week", True),
+        )
+    ),
 }
 
 
-def _template_text() -> str:
-    return TEMPLATE_PATH.read_text(encoding="utf-8")
-
-
-def _resource_blocks(template: str) -> dict[str, str]:
-    lines = template.splitlines()
-    resources_start = lines.index("Resources:") + 1
-    resources_end = next(
-        (index for index in range(resources_start, len(lines)) if lines[index] == "Outputs:"),
-        len(lines),
+def _schedules():
+    pattern = re.compile(
+        r"Type: ScheduleV2\n\s+Properties:\n"
+        r"\s+ScheduleExpression: (?P<cron>.+)\n"
+        r"\s+ScheduleExpressionTimezone: (?P<tz>.+)\n"
+        r"\s+Input: '(?P<input>.+)'"
     )
-    blocks: dict[str, list[str]] = {}
-    current_id = None
-
-    for line in lines[resources_start:resources_end]:
-        if line.startswith("  ") and not line.startswith("    ") and line.endswith(":"):
-            current_id = line.strip()[:-1]
-            blocks[current_id] = [line]
-        elif current_id is not None:
-            blocks[current_id].append(line)
-
-    return {resource_id: "\n".join(block) for resource_id, block in blocks.items()}
+    return [match.groupdict() for match in pattern.finditer(TEMPLATE)]
 
 
-def test_no_public_api_events_outputs_or_prohibited_resources():
-    template = _template_text()
+def test_single_menu_function_with_runtime_only_code_uri():
+    assert TEMPLATE.count("Type: AWS::Serverless::Function") == 1
+    assert "\n  MenuFunction:\n" in TEMPLATE
+    assert "CodeUri: src/" in TEMPLATE
+    assert "Handler: functions.handler.lambda_handler" in TEMPLATE
+    assert "ContentUri: layer/" in TEMPLATE
+    assert sorted(path.name for path in (ROOT / "src").iterdir()) == ["functions"]
+    assert sorted(path.name for path in (ROOT / "layer").iterdir()) == ["requirements.txt"]
+    for forbidden in ("env.json", ".env", "samconfig.toml", "tests"):
+        assert not list((ROOT / "src").rglob(forbidden))
 
-    assert "Type: Api" not in template
-    assert "ServerlessRestApi" not in template
-    assert "Outputs:" not in template
 
-    prohibited = (
-        "AWS::Serverless::Api",
-        "AWS::ApiGateway",
+def test_no_state_machines_alarms_or_reserved_concurrency():
+    for forbidden in (
+        "StateMachine",
+        "AWS::CloudWatch::Alarm",
+        "ReservedConcurrentExecutions",
+        "OPERATION",
+        "Type: Api",
         "FunctionUrlConfig",
-        "AWS::ApiGateway::ApiKey",
-        "AWS::ApiGateway::UsagePlan",
-        "AWS::SQS::Queue",
-        "AWS::SNS::Topic",
-        "DeadLetterQueue",
-        "DestinationConfig",
-        "AWS::CloudWatch::Dashboard",
-        "AWS::Logs::MetricFilter",
-        "Tracing: Active",
-        "ApplicationSignals",
-        "OpenTelemetry",
-        "ADOT",
-        "X-Ray",
-    )
-    for value in prohibited:
-        assert value not in template
-
-
-def test_preserves_all_nine_functions_and_global_configuration():
-    template = _template_text()
-    resources = _resource_blocks(template)
-    function_ids = {
-        resource_id
-        for resource_id, block in resources.items()
-        if "Type: AWS::Serverless::Function" in block
-    }
-
-    assert function_ids == set(FUNCTION_HANDLERS)
-    assert template.count("Type: AWS::Serverless::Function") == 9
-    assert "Runtime: python3.11" in template
-    assert "Architectures: [arm64]" in template
-    assert "Timeout: 300" in template
-    assert "MemorySize: 512" in template
-
-    layer = resources["PythonRequirementsLayer"]
-    assert "CompatibleArchitectures:\n        - arm64" in layer
-    assert "BuildArchitecture: arm64" in layer
-
-    for function_id, handler in FUNCTION_HANDLERS.items():
-        block = resources[function_id]
-        assert f"Handler: {handler}" in block
-        assert f"OPERATION: {FUNCTION_OPERATIONS[function_id]}" in block
-        assert "!Ref PythonRequirementsLayer" in block
-
-
-def test_only_weekly_schedules_use_retry_state_machines():
-    template = _template_text()
-    resources = _resource_blocks(template)
-
-    assert template.count("Type: ScheduleV2") == 9
-
-    for restaurant in ("Dodam", "Haksik", "Faculty", "Dormitory"):
-        state_machine = resources[f"{restaurant}RetryStateMachine"]
-        assert "Type: AWS::Serverless::StateMachine" in state_machine
-        assert "DefinitionUri: statemachine/menu-retry-workflow.asl.json" in state_machine
-        assert "NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn" in state_machine
-        assert state_machine.count("LambdaInvokePolicy:") == 2
-        expected_schedule_count = 0 if restaurant == "Dormitory" else 1
-        assert state_machine.count("Type: ScheduleV2") == expected_schedule_count
-        assert resources[f"{restaurant}RetryStateMachineAlarm"].count("AWS::CloudWatch::Alarm") == 1
-
-    for function_id in DIRECT_SCHEDULE_FUNCTIONS:
-        assert resources[function_id].count("Type: ScheduleV2") == 1
-        assert "RecoverySchedule:" in resources[function_id]
-    assert resources["DormitorySchedulingFunction"].count("Type: ScheduleV2") == 3
-    assert "DeadlineSchedule:" in resources["DormitorySchedulingFunction"]
-
-
-def test_preserves_common_retry_workflow():
-    workflow = cast(
-        dict[str, object],
-        json.loads(MENU_ASL_PATH.read_text(encoding="utf-8")),
-    )
-    states = cast(dict[str, object], workflow["States"])
-    invoke = cast(dict[str, object], states["InvokeSchedule"])
-    invoke_parameters = cast(dict[str, object], invoke["Parameters"])
-    retries = cast(list[object], invoke["Retry"])
-    notify = cast(dict[str, object], states["NotifyFinalFailure"])
-    notify_parameters = cast(dict[str, object], notify["Parameters"])
-
-    assert workflow["StartAt"] == "PrepareInput"
-    assert set(states) == {
-        "PrepareInput",
-        "MergeInput",
-        "InvokeSchedule",
-        "NotifyFinalFailure",
-        "MarkExecutionFailed",
-    }
-    assert invoke_parameters["FunctionName"] == "${SchedulingFunctionArn}"
-    assert retries[2] == {
-        "ErrorEquals": ["RetryableEmptyMenuError", "RetryableApiSendError", "RetryableMenuInterpretationError"],
-        "IntervalSeconds": 7200,
-        "MaxAttempts": 9,
-        "BackoffRate": 1.0,
-    }
-    assert invoke["Catch"] == [
-        {
-            "ErrorEquals": ["States.ALL"],
-            "ResultPath": "$.error",
-            "Next": "NotifyFinalFailure",
-        }
-    ]
-    assert (
-        notify_parameters["FunctionName"] == "${NotifyFailureFunctionArn}"
-    )
-
-
-def test_schedules_use_seoul_timezone_without_reserved_concurrency():
-    template = _template_text()
-    resources = _resource_blocks(template)
-
-    for function_id in (
-        "DodamSchedulingFunction",
-        "HaksikSchedulingFunction",
-        "FacultySchedulingFunction",
-        "DormitorySchedulingFunction",
     ):
-        assert "ReservedConcurrentExecutions" not in resources[function_id]
-
-    assert template.count("ScheduleExpressionTimezone: Asia/Seoul") == 9
-    assert template.count("ScheduleExpression: cron(0 16 ? * SUN *)") == 3
-    assert template.count("ScheduleExpression: cron(5 16 ? * MON-THU *)") == 3
-    for hour in (8, 9, 10):
-        assert f"ScheduleExpression: cron(0 {hour} ? * * *)" in template
+        assert forbidden not in TEMPLATE
+    assert not (ROOT / "statemachine").exists()
 
 
-def test_each_lambda_has_a_retained_30_day_log_group():
-    template = _template_text()
-    resources = _resource_blocks(template)
-    log_groups = {
-        resource_id: block
-        for resource_id, block in resources.items()
-        if "Type: AWS::Logs::LogGroup" in block
-    }
+def test_schedules_are_kst_and_pass_restaurant_dates_final_and_both_environments():
+    schedules = _schedules()
 
-    assert len(log_groups) == 9
-    assert template.count("RetentionInDays: 30") == 9
-
-    for function_id in FUNCTION_HANDLERS:
-        block = log_groups[f"{function_id}LogGroup"]
-        assert f"DependsOn: {function_id}" in block
-        assert f'LogGroupName: !Sub "/aws/lambda/${{{function_id}}}"' in block
-        assert "RetentionInDays: 30" in block
-        assert "DeletionPolicy: Retain" in block
-        assert "UpdateReplacePolicy: Retain" in block
+    assert len(schedules) == TEMPLATE.count("Type: ScheduleV2") == len(EXPECTED_SCHEDULES)
+    assert {schedule["tz"] for schedule in schedules} == {"Asia/Seoul"}
+    actual = set()
+    for schedule in schedules:
+        payload = json.loads(schedule["input"])
+        assert payload["environments"] == ["dev", "prod"]
+        actual.add((schedule["cron"], payload["restaurant"], payload["dates"], payload["final"]))
+    assert actual == EXPECTED_SCHEDULES
 
 
-def test_retention_runbook_requires_iam_invoke_and_import_before_deploy():
-    readme = README_PATH.read_text(encoding="utf-8")
+def test_parameters_and_secret_handling():
+    for name in ("GPTApiKey", "SlackWebhookUrl", "DormitoryRelayToken"):
+        assert re.search(rf"  {name}:\n    Type: String\n    NoEcho: true", TEMPLATE)
+    assert re.search(r'  DormitoryRelayUrl:\n    Type: String\n    Default: ""', TEMPLATE)
+    for variable in (
+        "GPT_API_KEY",
+        "SLACK_WEBHOOK_URL",
+        "API_BASE_URL",
+        "DEV_API_BASE_URL",
+        "DORMITORY_RELAY_URL",
+        "DORMITORY_RELAY_TOKEN",
+    ):
+        assert f"{variable}: !Ref" in TEMPLATE
 
-    assert "aws lambda invoke" in readme
-    assert "IAM" in readme
-    assert "CloudFormation IMPORT" in readme
-    assert "/aws/lambda/" in readme
-    assert "30일" in readme
-    assert "배포를 중단" in readme
-    assert "execute-api" not in readme
-    assert "sam local start-api" not in readme
+
+def test_one_retained_30_day_log_group():
+    assert TEMPLATE.count("Type: AWS::Logs::LogGroup") == 1
+    assert 'LogGroupName: !Sub "/aws/lambda/${MenuFunction}"' in TEMPLATE
+    assert "RetentionInDays: 30" in TEMPLATE
+    assert "DeletionPolicy: Retain" in TEMPLATE

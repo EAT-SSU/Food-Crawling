@@ -332,9 +332,12 @@ def test_dormitory_missing_header_cell_and_malformed_rowspan_are_explicit():
 
 
 class _Response:
-    def __init__(self, html="", error=None):
+    def __init__(self, html="", error=None, body=None, charset=None, status=200):
         self.html = html
         self.error = error
+        self.body = body
+        self.charset = charset
+        self.status = status
 
     async def __aenter__(self):
         return self
@@ -348,6 +351,9 @@ class _Response:
 
     async def text(self):
         return self.html
+
+    async def read(self):
+        return self.body if self.body is not None else self.html.encode("utf-8")
 
 
 class _Session:
@@ -448,3 +454,74 @@ async def test_fetch_failure_uses_one_attempt_and_preserves_error_classification
     assert raised.value.error_type == "TimeoutError"
     assert raised.value.__cause__ is None
     assert "provider detail" not in str(raised.value)
+
+
+MAINTENANCE_PAGE = (
+    "<html><head><title>솔루션의 강국 - 월드베스트</title></head>"
+    "<body><img src='/images/error/not-found.gif'>현재 업데이트 준비중입니다</body></html>"
+)
+
+
+@pytest.mark.asyncio
+async def test_dormitory_sunday_requests_previous_monday():
+    dorm_html = (FIXTURES / "dormitory.html").read_text(encoding="utf-8")
+    session = _Session(_Response(dorm_html))
+
+    await fetch_meals(
+        "DORMITORY",
+        "20261101",
+        requested_dates=["20261101"],
+        session_factory=lambda: session,
+        dormitory_base_url="https://source.example/dormitory",
+    )
+
+    params = session.calls[0][1]["params"]
+    assert (params["gyear"], params["gmonth"], params["gday"]) == (2026, 10, 26)
+
+
+@pytest.mark.asyncio
+async def test_dormitory_relay_url_and_token_header(monkeypatch):
+    monkeypatch.setenv("DORMITORY_RELAY_URL", "https://relay.example/dorm")
+    monkeypatch.setenv("DORMITORY_RELAY_TOKEN", "relay-token")
+    expected = SOURCE["DORMITORY"]
+    dorm_html = (FIXTURES / "dormitory.html").read_text(encoding="utf-8")
+    session = _Session(_Response(body=dorm_html.encode("cp949"), charset=None))
+
+    records = await fetch_meals(
+        "DORMITORY",
+        expected["dates"][0],
+        requested_dates=expected["dates"],
+        session_factory=lambda: session,
+    )
+
+    (args, kwargs), = session.calls
+    assert args == ("https://relay.example/dorm",)
+    assert kwargs["headers"] == {"X-Relay-Token": "relay-token"}
+    assert set(kwargs["params"]) == {"gyear", "gmonth", "gday"}
+    assert records == parse_dormitory_html(dorm_html, expected["dates"])
+
+
+def test_dormitory_maintenance_page_is_source_blocked():
+    with pytest.raises(SourceParseError) as raised:
+        parse_dormitory_html(MAINTENANCE_PAGE, ["20261102"])
+    assert raised.value.reason_code == "SOURCE_BLOCKED"
+    assert raised.value.outcome == AMBIGUOUS_EMPTY
+
+
+@pytest.mark.asyncio
+async def test_parse_failure_logs_status_length_and_title_without_body(caplog):
+    session = _Session(_Response(MAINTENANCE_PAGE))
+
+    with pytest.raises(SourceParseError):
+        await fetch_meals(
+            "DORMITORY",
+            "20261102",
+            session_factory=lambda: session,
+            dormitory_base_url="https://source.example/dormitory",
+        )
+
+    logged = caplog.text
+    assert "SOURCE_BLOCKED" in logged
+    assert "status=200" in logged
+    assert "솔루션의 강국" in logged
+    assert "업데이트 준비중" not in logged
