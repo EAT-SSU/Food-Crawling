@@ -463,3 +463,14 @@ def test_unknown_reason_code_collapses_to_generic_allowlisted_reason():
     error = menu_ai.MenuInterpretationError("untrusted detail", "PROVIDER_SECRET")
 
     assert error.reason_code == "VALIDATION_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_interpret_menu_closes_client():
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_response(_valid_dormitory()))
+
+    with patch("functions.menu_ai.AsyncOpenAI", return_value=client):
+        await menu_ai.interpret_menu("secret", "DORMITORY", "김치찌개 쌀밥 계란말이")
+
+    client.__aexit__.assert_awaited_once()
