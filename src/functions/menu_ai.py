@@ -358,4 +358,5 @@ async def interpret_menu(
         )
     evidence = tuple(source_english)
     client = AsyncOpenAI(api_key=api_key)
-    return await _request_and_parse(client, restaurant_name, raw_source, evidence)
+    async with client:
+        return await _request_and_parse(client, restaurant_name, raw_source, evidence)

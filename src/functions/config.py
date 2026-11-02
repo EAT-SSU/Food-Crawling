@@ -33,21 +33,6 @@ _RESTAURANTS: Mapping[str, Mapping[str, Any]] = MappingProxyType(
     }
 )
 
-_OPERATIONS = MappingProxyType(
-    {
-        "scrape_dodam": ("scrape", "DODAM"),
-        "scrape_haksik": ("scrape", "HAKSIK"),
-        "scrape_faculty": ("scrape", "FACULTY"),
-        "scrape_dormitory": ("scrape", "DORMITORY"),
-        "schedule_dodam": ("schedule", "DODAM"),
-        "schedule_haksik": ("schedule", "HAKSIK"),
-        "schedule_faculty": ("schedule", "FACULTY"),
-        "schedule_dormitory": ("schedule", "DORMITORY"),
-        "notify_final_failure": ("final_failure", "DORMITORY"),
-    }
-)
-
-
 def load_restaurant_config(restaurant: object) -> Mapping[str, Any] | None:
     """Return public metadata only for an allowlisted restaurant name."""
     if not isinstance(restaurant, str):
@@ -65,22 +50,17 @@ def _required_environment(name: str) -> str:
     return value
 
 
-def load_operation_config(operation: str) -> Mapping[str, Any] | None:
-    spec = _OPERATIONS.get(operation)
-    if spec is None:
+def load_config(restaurant: object) -> Mapping[str, Any] | None:
+    """Return restaurant metadata plus runtime settings, or None if not allowlisted."""
+    metadata = load_restaurant_config(restaurant)
+    if metadata is None:
         return None
-
-    kind, restaurant = spec
-    config: dict[str, Any] = {
-        "operation": operation,
-        "kind": kind,
-        "restaurant": restaurant,
-        **_RESTAURANTS[restaurant],
-        "slack_webhook_url": _required_environment("SLACK_WEBHOOK_URL"),
-    }
-    if kind != "final_failure":
-        config["gpt_api_key"] = _required_environment("GPT_API_KEY")
-        config["dev_api_base_url"] = _required_environment("DEV_API_BASE_URL")
-    if kind == "schedule":
-        config["api_base_url"] = _required_environment("API_BASE_URL")
-    return MappingProxyType(config)
+    return MappingProxyType(
+        {
+            **metadata,
+            "gpt_api_key": _required_environment("GPT_API_KEY"),
+            "slack_webhook_url": _required_environment("SLACK_WEBHOOK_URL"),
+            "api_base_url": _required_environment("API_BASE_URL"),
+            "dev_api_base_url": _required_environment("DEV_API_BASE_URL"),
+        }
+    )

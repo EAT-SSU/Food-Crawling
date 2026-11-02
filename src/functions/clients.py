@@ -8,26 +8,6 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fi
 
 
 _HTTP_TIMEOUT_SECONDS = 10
-_SAFE_EMPTY_REASONS = {
-    "HOLIDAY": "휴무일",
-    "WEEKEND_CLOSED": "주말 미운영",
-    "CLOSED_MARKER": "미운영",
-    "SOURCE_EMPTY": "메뉴 미게시 또는 원본 누락",
-    "SOURCE_SCHEMA_CHANGED": "메뉴 원본 구조 변경",
-    "MISSING_DATE_HEADER": "메뉴 원본 구조 변경",
-    "MISSING_DATE_CELL": "메뉴 원본 구조 변경",
-    "MISSING_SLOT_COLUMN": "메뉴 원본 구조 변경",
-    "EMPTY_CELL": "메뉴 미게시 또는 원본 누락",
-}
-
-_SAFE_STAGE_REASONS = {
-    "menu_ai": "메뉴 파싱 실패",
-    "parsing": "메뉴 파싱 실패",
-    "source": "메뉴 원본 확인 필요",
-    "publication": "메뉴 저장 실패",
-    "unmatched": "대표메뉴 매칭 실패",
-}
-
 _UNSAFE_DISPLAY_PATTERN = re.compile(
     r"<|>|://|www\.|critical|cause|secret|exception|traceback|provider\.",
     re.IGNORECASE,
@@ -235,8 +215,22 @@ async def send_slack_text(*, webhook_url: str, text: str) -> None:
         raise SlackNotificationError("Slack notification failed") from error
 
 
+def _representatives(raw: object, safe_items: Sequence[str]) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    rendered: list[str] = []
+    for item in raw:
+        if not isinstance(item, Mapping) or set(item) != {"nameKo", "nameEn"}:
+            continue
+        name_ko = _safe_display(item["nameKo"])
+        name_en = _safe_display(item["nameEn"])
+        if name_ko in safe_items and name_en is not None:
+            rendered.append(f"{name_ko} ({name_en})")
+    return rendered
+
+
 def format_slack_text(notification: Mapping[str, object]) -> str:
-    """Render only allowlisted orchestration fields for Slack."""
+    """Render one of three allowlisted notification kinds for Slack."""
     notification_type = notification.get("type")
     raw_date = notification.get("date")
     date = (
@@ -245,45 +239,29 @@ def format_slack_text(notification: Mapping[str, object]) -> str:
         else "unknown"
     )
     restaurant = _safe_display(notification.get("restaurant")) or "식당"
-    header = f"🍽️ {restaurant} ({date})"
-    if notification_type == "final_failure":
-        allowed_errors = {
-            "RetryableEmptyMenuError": "메뉴 미게시",
-            "RetryableApiSendError": "메뉴 저장 실패",
-            "RetryableMenuInterpretationError": "메뉴 파싱 실패",
-            "Lambda.ServiceException": "Lambda 서비스 오류",
-            "Lambda.AWSLambdaException": "Lambda 실행 오류",
-            "Lambda.SdkClientException": "Lambda 호출 오류",
-            "Lambda.TooManyRequestsException": "Lambda 요청 제한",
-        }
-        raw_error_type = notification.get("error_type")
-        error_type = raw_error_type if isinstance(raw_error_type, str) else "UnknownError"
-        reason = allowed_errors.get(error_type, "알 수 없는 처리 오류")
-        return f"{header}\n⚠️ 최종 처리 실패: {reason}"
-    if notification_type == "weekly_completeness":
-        completeness = notification.get("completeness")
-        values = completeness if isinstance(completeness, Mapping) else {}
-
-        def safe_count(name: str) -> int:
-            value = values.get(name)
-            return (
-                value
-                if isinstance(value, int)
-                and not isinstance(value, bool)
-                and value >= 0
-                else 0
+    if notification_type == "missing_on_final":
+        lines = [f"🚨 {restaurant}: 마감 시점까지 발행되지 않은 코너"]
+        missing = notification.get("missing")
+        for entry in missing if isinstance(missing, list) else []:
+            if not isinstance(entry, Mapping):
+                continue
+            entry_date = entry.get("date")
+            if not isinstance(entry_date, str) or not re.fullmatch(r"\d{8}", entry_date):
+                continue
+            time_slot = entry.get("time")
+            if not isinstance(time_slot, str) or not re.fullmatch(r"[A-Z]+", time_slot):
+                continue
+            corner = entry.get("corner")
+            corner_label = (
+                corner
+                if isinstance(corner, str) and re.fullmatch(r"[가-힣0-9]{1,8}", corner)
+                else "코너"
             )
+            environment = "prod" if entry.get("environment") == "prod" else "dev"
+            lines.append(f"• {entry_date} {time_slot} {corner_label} ({environment})")
+        return "\n".join(lines)
 
-        secured = safe_count("secured")
-        total = safe_count("total")
-        expected_empty = safe_count("expected_empty")
-        missing = notification.get("remaining_missing")
-        missing_count = len(missing) if isinstance(missing, list) else 0
-        return (
-            f"{header}\n"
-            f"⚠️ 주간 메뉴 확보: {secured}/{total}개 (미운영 {expected_empty}개)\n"
-            f"⚠️ 마감 시점 미확보: {missing_count}개"
-        )
+    header = f"🍽️ {restaurant} ({date})"
     if notification_type == "kept_with_reviews":
         time_slot = _safe_display(notification.get("time")) or "시간대"
         raw_ids = notification.get("meal_ids")
@@ -296,91 +274,25 @@ def format_slack_text(notification: Mapping[str, object]) -> str:
             f"{header}\n"
             f"⚠️ {time_slot}: 리뷰가 있어 유지된 식단 {', '.join(meal_ids)}"
         )
+
+    lines = [header]
     menus = notification.get("menus")
     main_menus = notification.get("main_menus")
-    empty_reasons = notification.get("empty_reasons")
-    if (
-        isinstance(empty_reasons, Mapping)
-        and empty_reasons.get("전체") == "HOLIDAY"
-    ):
-        return f"{header}\nℹ️ 휴무일"
-    if (
-        isinstance(empty_reasons, Mapping)
-        and empty_reasons.get("전체") == "WEEKEND_CLOSED"
-    ):
-        return f"{header}\nℹ️ 주말 미운영"
-
-    statuses: list[str] = []
-    status_keys: set[tuple[str | None, str]] = set()
-    error_slots: set[str] = set()
-    for field in ("errors", "warnings"):
-        entries = notification.get(field)
-        if not isinstance(entries, list):
-            continue
-        for entry in entries:
-            if not isinstance(entry, Mapping):
-                continue
-            raw_stage = entry.get("stage")
-            stage = raw_stage if isinstance(raw_stage, str) else ""
-            reason = _SAFE_STAGE_REASONS.get(stage)
-            if reason is None:
-                continue
-            slot = _safe_display(entry.get("slot"))
-            key = (slot, reason)
-            if key in status_keys:
-                continue
-            status_keys.add(key)
-            if slot:
-                error_slots.add(slot)
-            statuses.append(f"⚠️ {slot}: {reason}" if slot else f"⚠️ {reason}")
-
-    safe_lines = [header]
-    empty_slots = set(empty_reasons) if isinstance(empty_reasons, Mapping) else set()
+    representatives_by_slot = main_menus if isinstance(main_menus, Mapping) else {}
     if isinstance(menus, Mapping):
         for raw_slot, items in sorted(menus.items(), key=lambda item: str(item[0])):
             slot = _safe_display(raw_slot)
-            if not slot or not isinstance(items, list) or slot in empty_slots:
+            if not slot or not isinstance(items, list):
                 continue
             safe_items = [
-                safe_item
-                for item in items
-                if (safe_item := _safe_display(item)) is not None
+                safe_item for item in items if (safe_item := _safe_display(item)) is not None
             ]
-            if safe_items:
-                safe_lines.append(f"• {slot}: {', '.join(safe_items)}")
-                raw_representatives = (
-                    main_menus.get(raw_slot) if isinstance(main_menus, Mapping) else None
-                )
-                safe_representatives: list[str] = []
-                if isinstance(raw_representatives, list):
-                    for representative in raw_representatives:
-                        if (
-                            not isinstance(representative, Mapping)
-                            or set(representative) != {"nameKo", "nameEn"}
-                        ):
-                            continue
-                        raw_name_ko = representative["nameKo"]
-                        raw_name_en = representative["nameEn"]
-                        if not isinstance(raw_name_ko, str) or not isinstance(
-                            raw_name_en, str
-                        ):
-                            continue
-                        name_ko = _safe_display(raw_name_ko)
-                        name_en = _safe_display(raw_name_en)
-                        if name_ko in safe_items and name_en is not None:
-                            safe_representatives.append(f"{name_ko} ({name_en})")
-                if safe_representatives:
-                    safe_lines.append(f"  ↳ 대표: {', '.join(safe_representatives)}")
-
-    if isinstance(empty_reasons, Mapping):
-        for raw_slot, raw_reason_code in sorted(
-            empty_reasons.items(), key=lambda item: str(item[0])
-        ):
-            slot = _safe_display(raw_slot)
-            reason_code = raw_reason_code if isinstance(raw_reason_code, str) else ""
-            if slot and slot not in error_slots:
-                safe_lines.append(
-                    f"ℹ️ {slot}: {_SAFE_EMPTY_REASONS.get(reason_code, '메뉴 원본 확인 필요')}"
-                )
-    safe_lines.extend(statuses)
-    return "\n".join(safe_lines)
+            if not safe_items:
+                continue
+            lines.append(f"• {slot}: {', '.join(safe_items)}")
+            representatives = _representatives(
+                representatives_by_slot.get(raw_slot), safe_items
+            )
+            if representatives:
+                lines.append(f"  ↳ 대표: {', '.join(representatives)}")
+    return "\n".join(lines)

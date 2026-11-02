@@ -8,12 +8,6 @@ Globals:
     Architectures: [arm64]
     Timeout: 300
     MemorySize: 512
-    Environment:
-      Variables:
-        GPT_API_KEY: !Ref GPTApiKey
-        SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
-        API_BASE_URL: !Ref ApiBaseUrl
-        DEV_API_BASE_URL: !Ref DevApiBaseUrl
 
 Parameters:
   GPTApiKey:
@@ -26,15 +20,21 @@ Parameters:
     Type: String
   DevApiBaseUrl:
     Type: String
+  DormitoryRelayUrl:
+    Type: String
+    Default: ""
+  DormitoryRelayToken:
+    Type: String
+    NoEcho: true
+    Default: ""
 
 Resources:
-  # Python 의존성 레이어
   PythonRequirementsLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
       LayerName: !Sub "${AWS::StackName}-python-requirements"
       Description: Python requirements layer
-      ContentUri: ./
+      ContentUri: layer/
       CompatibleRuntimes:
         - python3.11
       CompatibleArchitectures:
@@ -43,404 +43,105 @@ Resources:
       BuildMethod: python3.11
       BuildArchitecture: arm64
 
-  # === Scraping Functions ===
-  # 하루짜리 스크래핑 함수들 (백업용)
-  DodamScrapingFunction:
+  # One function for every restaurant; the schedule input selects the work.
+  MenuFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: ./
+      CodeUri: src/
       Handler: functions.handler.lambda_handler
       Environment:
         Variables:
-          OPERATION: scrape_dodam
-      Layers:
-        - !Ref PythonRequirementsLayer
-
-  HaksikScrapingFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: ./
-      Handler: functions.handler.lambda_handler
-      Environment:
-        Variables:
-          OPERATION: scrape_haksik
-      Layers:
-        - !Ref PythonRequirementsLayer
-
-  FacultyScrapingFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: ./
-      Handler: functions.handler.lambda_handler
-      Environment:
-        Variables:
-          OPERATION: scrape_faculty
-      Layers:
-        - !Ref PythonRequirementsLayer
-
-  DormitoryScrapingFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: ./
-      Handler: functions.handler.lambda_handler
-      Environment:
-        Variables:
-          OPERATION: scrape_dormitory
-      Layers:
-        - !Ref PythonRequirementsLayer
-
-  # === Scheduling Functions ===
-  # 주간 스케줄링 함수들 (메인)
-  DodamSchedulingFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: ./
-      Handler: functions.handler.lambda_handler
-      Environment:
-        Variables:
-          OPERATION: schedule_dodam
+          GPT_API_KEY: !Ref GPTApiKey
+          SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
+          API_BASE_URL: !Ref ApiBaseUrl
+          DEV_API_BASE_URL: !Ref DevApiBaseUrl
+          DORMITORY_RELAY_URL: !Ref DormitoryRelayUrl
+          DORMITORY_RELAY_TOKEN: !Ref DormitoryRelayToken
       Layers:
         - !Ref PythonRequirementsLayer
       Events:
-        RecoverySchedule:
-          Type: ScheduleV2
-          Properties:
-            ScheduleExpression: cron(5 16 ? * MON-THU *)
-            ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"remaining_week","notify_summary":true}'
-
-  HaksikSchedulingFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: ./
-      Handler: functions.handler.lambda_handler
-      Environment:
-        Variables:
-          OPERATION: schedule_haksik
-      Layers:
-        - !Ref PythonRequirementsLayer
-      Events:
-        RecoverySchedule:
-          Type: ScheduleV2
-          Properties:
-            ScheduleExpression: cron(5 16 ? * MON-THU *)
-            ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"remaining_week","notify_summary":true}'
-
-  FacultySchedulingFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: ./
-      Handler: functions.handler.lambda_handler
-      Environment:
-        Variables:
-          OPERATION: schedule_faculty
-      Layers:
-        - !Ref PythonRequirementsLayer
-      Events:
-        RecoverySchedule:
-          Type: ScheduleV2
-          Properties:
-            ScheduleExpression: cron(5 16 ? * MON-THU *)
-            ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"remaining_week","notify_summary":true}'
-
-  DormitorySchedulingFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: ./
-      Handler: functions.handler.lambda_handler
-      Environment:
-        Variables:
-          OPERATION: schedule_dormitory
-      Layers:
-        - !Ref PythonRequirementsLayer
-      Events:
-        MorningSchedule:
+        DormitoryAt0800:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(0 8 ? * * *)
             ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"current_week","notify_summary":true}'
-        MidMorningSchedule:
+            Input: '{"restaurant":"DORMITORY","dates":"current_week","final":false,"environments":["dev","prod"]}'
+        DormitoryAt0900:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(0 9 ? * * *)
             ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"current_week","notify_summary":true}'
-        DeadlineSchedule:
+            Input: '{"restaurant":"DORMITORY","dates":"current_week","final":false,"environments":["dev","prod"]}'
+        DormitoryAt1000:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(0 10 ? * * *)
             ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"current_week","notify_summary":true}'
-
-  NotifyFailureFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: ./
-      Handler: functions.handler.lambda_handler
-      Environment:
-        Variables:
-          OPERATION: notify_final_failure
-      Layers:
-        - !Ref PythonRequirementsLayer
-
-  # === Lambda Log Groups ===
-  DodamScrapingFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    DependsOn: DodamScrapingFunction
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Metadata:
-      cfn-lint:
-        config:
-          ignore_checks: [W3005]
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${DodamScrapingFunction}"
-      RetentionInDays: 30
-
-  HaksikScrapingFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    DependsOn: HaksikScrapingFunction
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Metadata:
-      cfn-lint:
-        config:
-          ignore_checks: [W3005]
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${HaksikScrapingFunction}"
-      RetentionInDays: 30
-
-  FacultyScrapingFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    DependsOn: FacultyScrapingFunction
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Metadata:
-      cfn-lint:
-        config:
-          ignore_checks: [W3005]
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${FacultyScrapingFunction}"
-      RetentionInDays: 30
-
-  DormitoryScrapingFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    DependsOn: DormitoryScrapingFunction
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Metadata:
-      cfn-lint:
-        config:
-          ignore_checks: [W3005]
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${DormitoryScrapingFunction}"
-      RetentionInDays: 30
-
-  DodamSchedulingFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    DependsOn: DodamSchedulingFunction
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Metadata:
-      cfn-lint:
-        config:
-          ignore_checks: [W3005]
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${DodamSchedulingFunction}"
-      RetentionInDays: 30
-
-  HaksikSchedulingFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    DependsOn: HaksikSchedulingFunction
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Metadata:
-      cfn-lint:
-        config:
-          ignore_checks: [W3005]
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${HaksikSchedulingFunction}"
-      RetentionInDays: 30
-
-  FacultySchedulingFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    DependsOn: FacultySchedulingFunction
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Metadata:
-      cfn-lint:
-        config:
-          ignore_checks: [W3005]
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${FacultySchedulingFunction}"
-      RetentionInDays: 30
-
-  DormitorySchedulingFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    DependsOn: DormitorySchedulingFunction
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Metadata:
-      cfn-lint:
-        config:
-          ignore_checks: [W3005]
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${DormitorySchedulingFunction}"
-      RetentionInDays: 30
-
-  NotifyFailureFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    DependsOn: NotifyFailureFunction
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Metadata:
-      cfn-lint:
-        config:
-          ignore_checks: [W3005]
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${NotifyFailureFunction}"
-      RetentionInDays: 30
-
-  DodamRetryStateMachine:
-    Type: AWS::Serverless::StateMachine
-    Properties:
-      DefinitionUri: statemachine/menu-retry-workflow.asl.json
-      DefinitionSubstitutions:
-        SchedulingFunctionArn: !GetAtt DodamSchedulingFunction.Arn
-        NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn
-        Restaurant: DODAM
-      Policies:
-        - LambdaInvokePolicy:
-            FunctionName: !Ref DodamSchedulingFunction
-        - LambdaInvokePolicy:
-            FunctionName: !Ref NotifyFailureFunction
-      Events:
-        WeeklySeoulSchedule:
+            Input: '{"restaurant":"DORMITORY","dates":"current_week","final":true,"environments":["dev","prod"]}'
+        HaksikNextWeek:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(0 16 ? * SUN *)
             ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"next_week","notify_summary":true}'
-
-  HaksikRetryStateMachine:
-    Type: AWS::Serverless::StateMachine
-    Properties:
-      DefinitionUri: statemachine/menu-retry-workflow.asl.json
-      DefinitionSubstitutions:
-        SchedulingFunctionArn: !GetAtt HaksikSchedulingFunction.Arn
-        NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn
-        Restaurant: HAKSIK
-      Policies:
-        - LambdaInvokePolicy:
-            FunctionName: !Ref HaksikSchedulingFunction
-        - LambdaInvokePolicy:
-            FunctionName: !Ref NotifyFailureFunction
-      Events:
-        WeeklySeoulSchedule:
+            Input: '{"restaurant":"HAKSIK","dates":"next_week","final":false,"environments":["dev","prod"]}'
+        HaksikNextWeekFinal:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 20 ? * SUN *)
+            ScheduleExpressionTimezone: Asia/Seoul
+            Input: '{"restaurant":"HAKSIK","dates":"next_week","final":true,"environments":["dev","prod"]}'
+        HaksikRemainingWeek:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(5 16 ? * MON-THU *)
+            ScheduleExpressionTimezone: Asia/Seoul
+            Input: '{"restaurant":"HAKSIK","dates":"remaining_week","final":true,"environments":["dev","prod"]}'
+        DodamNextWeek:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(0 16 ? * SUN *)
             ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"next_week","notify_summary":true}'
-
-  FacultyRetryStateMachine:
-    Type: AWS::Serverless::StateMachine
-    Properties:
-      DefinitionUri: statemachine/menu-retry-workflow.asl.json
-      DefinitionSubstitutions:
-        SchedulingFunctionArn: !GetAtt FacultySchedulingFunction.Arn
-        NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn
-        Restaurant: FACULTY
-      Policies:
-        - LambdaInvokePolicy:
-            FunctionName: !Ref FacultySchedulingFunction
-        - LambdaInvokePolicy:
-            FunctionName: !Ref NotifyFailureFunction
-      Events:
-        WeeklySeoulSchedule:
+            Input: '{"restaurant":"DODAM","dates":"next_week","final":false,"environments":["dev","prod"]}'
+        DodamNextWeekFinal:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 20 ? * SUN *)
+            ScheduleExpressionTimezone: Asia/Seoul
+            Input: '{"restaurant":"DODAM","dates":"next_week","final":true,"environments":["dev","prod"]}'
+        DodamRemainingWeek:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(5 16 ? * MON-THU *)
+            ScheduleExpressionTimezone: Asia/Seoul
+            Input: '{"restaurant":"DODAM","dates":"remaining_week","final":true,"environments":["dev","prod"]}'
+        FacultyNextWeek:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: cron(0 16 ? * SUN *)
             ScheduleExpressionTimezone: Asia/Seoul
-            Input: '{"schedule_mode":"next_week","notify_summary":true}'
+            Input: '{"restaurant":"FACULTY","dates":"next_week","final":false,"environments":["dev","prod"]}'
+        FacultyNextWeekFinal:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 20 ? * SUN *)
+            ScheduleExpressionTimezone: Asia/Seoul
+            Input: '{"restaurant":"FACULTY","dates":"next_week","final":true,"environments":["dev","prod"]}'
+        FacultyRemainingWeek:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(5 16 ? * MON-THU *)
+            ScheduleExpressionTimezone: Asia/Seoul
+            Input: '{"restaurant":"FACULTY","dates":"remaining_week","final":true,"environments":["dev","prod"]}'
 
-  DormitoryRetryStateMachine:
-    Type: AWS::Serverless::StateMachine
+  MenuFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DependsOn: MenuFunction
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks: [W3005]
     Properties:
-      DefinitionUri: statemachine/menu-retry-workflow.asl.json
-      DefinitionSubstitutions:
-        SchedulingFunctionArn: !GetAtt DormitorySchedulingFunction.Arn
-        NotifyFailureFunctionArn: !GetAtt NotifyFailureFunction.Arn
-        Restaurant: DORMITORY
-      Policies:
-        - LambdaInvokePolicy:
-            FunctionName: !Ref DormitorySchedulingFunction
-        - LambdaInvokePolicy:
-            FunctionName: !Ref NotifyFailureFunction
-
-  DodamRetryStateMachineAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmDescription: Dodam menu workflow exhausted all retries
-      Namespace: AWS/States
-      MetricName: ExecutionsFailed
-      Dimensions:
-        - Name: StateMachineArn
-          Value: !Ref DodamRetryStateMachine
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 1
-      Threshold: 1
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-
-  HaksikRetryStateMachineAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmDescription: Haksik menu workflow exhausted all retries
-      Namespace: AWS/States
-      MetricName: ExecutionsFailed
-      Dimensions:
-        - Name: StateMachineArn
-          Value: !Ref HaksikRetryStateMachine
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 1
-      Threshold: 1
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-
-  FacultyRetryStateMachineAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmDescription: Faculty menu workflow exhausted all retries
-      Namespace: AWS/States
-      MetricName: ExecutionsFailed
-      Dimensions:
-        - Name: StateMachineArn
-          Value: !Ref FacultyRetryStateMachine
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 1
-      Threshold: 1
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-
-  DormitoryRetryStateMachineAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmDescription: Dormitory menu workflow exhausted all retries
-      Namespace: AWS/States
-      MetricName: ExecutionsFailed
-      Dimensions:
-        - Name: StateMachineArn
-          Value: !Ref DormitoryRetryStateMachine
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 1
-      Threshold: 1
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
+      LogGroupName: !Sub "/aws/lambda/${MenuFunction}"
+      RetentionInDays: 30

@@ -1,224 +1,131 @@
 # Food Scrapper Serverless
 
-AWS Lambda를 이용하여 학교 식당 메뉴를 스크랩하고 Slack으로 알림을 보내주는 서버리스 애플리케이션입니다. AWS SAM으로 인프라를 관리합니다.
+숭실대 식당 메뉴를 크롤링해서 EAT-SSU Spring API(prod, dev)에 올리는 AWS SAM Lambda 프로젝트입니다.
+작업 전에 `CLAUDE.md`의 운영 규칙을 먼저 읽습니다.
 
-## 기능
+## 동작 흐름
 
-- 학교 식당 웹사이트에서 주간 메뉴 정보 스크랩
-- GPT(`gpt-5.6-luna`)로 메인메뉴 추출 및 영문 번역
-- Spring 서버에 메뉴 데이터 게시
-- Slack 채널에 처리 결과 알림
+스케줄 실행 한 번은 다음 순서로 진행합니다.
 
-## 기술 스택
+1. 원본 사이트에서 대상 날짜의 코너를 읽습니다(`scraper.py`).
+2. 환경(dev, prod)과 시간대마다 Spring 기존 식단을 GET으로 조회합니다.
+3. `fill` 모드에서는 기존 식단을 코너에 매칭하고, 매칭되지 않은 코너만 GPT로 해석합니다(`menu_ai.py`).
+4. 시간대 전체 코너 배열을 한 번에 PUT합니다(`clients.py`).
+5. 변경이 있는 날짜에만 Slack 요약을 보냅니다.
 
-- AWS Lambda: 메뉴 스크랩 및 가공 로직 실행
-- AWS IAM: 인증된 사용자와 역할에 Lambda 수동 호출 권한 부여
-- AWS EventBridge: 스케줄링된 스크랩 작업 관리
-- AWS Step Functions: 식당별 재시도 및 최종 실패 알림 워크플로우
-- AWS SAM: 인프라 관리 및 배포 자동화
+재시도는 별도 워크플로가 아니라 반복되는 cron 실행입니다. 매번 GET 후 시간대 전체를 PUT하므로 다시 실행해도 중복이 생기지 않습니다.
 
-## 런타임 아키텍처
-
-모든 Lambda 함수는 단일 핸들러 `functions.handler.lambda_handler`를 공유하며, 각 함수 리소스에 설정된 `OPERATION` 환경 변수로 동작을 구분합니다.
-
-### 다섯 개 런타임 모듈
+## 런타임 모듈 (`src/functions/`)
 
 | 모듈 | 역할 |
 |------|------|
-| `functions/handler.py` | 이벤트 파싱, 오퍼레이션 디스패치, 관찰 이벤트 발행 |
-| `functions/scraper.py` | 식당별 웹 스크래핑, `MealRecord` 반환 |
-| `functions/menu_ai.py` | GPT 호출, 메인메뉴 추출 및 검증 |
-| `functions/clients.py` | Spring POST, Slack 알림 |
-| `functions/config.py` | 오퍼레이션별 환경 변수 로드 |
+| `handler.py` | 이벤트 검증, 날짜 계산(KST), 코너 매칭, 발행, Slack 알림 |
+| `scraper.py` | 숭실 생협과 기숙사 사이트 파싱, 기숙사 릴레이, 차단 페이지 감지 |
+| `menu_ai.py` | GPT(`gpt-5.6-luna`) 호출, 메뉴 이름과 대표 메뉴 검증 |
+| `clients.py` | Spring GET/PUT, Slack 전송과 메시지 형식 |
+| `config.py` | 식당별 시간대 매핑과 가격, 환경 변수 |
 
-### GPT 모델 및 메뉴 추출 정책
+### 식당별 시간대 정책
 
-- **모델**: `gpt-5.6-luna` (고정)
-- **도구 호출**: `extract_main_menus` 단일 호출, strict 모드, 인덱스 기반 출력
-- **HAKSIK / DODAM / FACULTY**: 사이트 HTML에 포함된 영문 텍스트를 그대로 복사(`nameEn`은 소스 원문 verbatim)
-- **DORMITORY**: GPT가 영문 번역 생성, 정확히 `min(3, 메뉴 수)` 개 후보 반환
-
-### mainMenus 및 unmatchedMainMenus 처리
-
-- Spring POST 요청에 `mainMenus` 필드는 GPT 결과가 있을 때만 포함됩니다(선택적).
-- Spring 응답에 `unmatchedMainMenus`가 포함되면 accepted 경고로 처리하고 Slack 요약에 기록합니다. Spring 쓰기는 성공으로 간주합니다.
-
-### 식당별 슬롯 정책
-
-| 식당 | 슬롯 | Spring time | 가격 |
-|------|------|-------------|------|
-| DODAM | 중식 | LUNCH | 6000 |
-| DODAM | 석식 | DINNER | 6000 |
-| HAKSIK | 중식 | LUNCH | 5000 |
-| HAKSIK | 석식 | MORNING | 1000 |
-| FACULTY | 중식 | LUNCH | 7000 |
+| 식당 | 원본 코너 | Spring time | 가격 |
+|------|-----------|-------------|------|
+| DODAM | 중식1, 중식4 | LUNCH | 6000 |
+| DODAM | 석식1 | DINNER | 6000 |
+| HAKSIK | 중식1, 중식2, 중식3 | LUNCH | 5000 |
+| HAKSIK | 석식1 | MORNING | 1000 |
+| FACULTY | 중식1 | LUNCH | 7000 |
 | DORMITORY | 중식 | LUNCH | 5500 |
 | DORMITORY | 석식 | DINNER | 5500 |
 
-## 인프라 (9개 Lambda 리소스)
+한 시간대에 코너가 여러 개 들어갈 수 있으므로, 발행 여부는 코너 단위로 판정합니다.
 
-모든 함수는 `functions.handler.lambda_handler`를 사용하며 공개 API 엔드포인트나 Function URL이 없습니다.
+## 이벤트
 
-| SAM 논리 ID | OPERATION | 설명 |
-|-------------|-----------|------|
-| `DodamScrapingFunction` | `scrape_dodam` | 도담식당 단일 날짜 스크랩 (직접 호출용) |
-| `HaksikScrapingFunction` | `scrape_haksik` | 학생식당 단일 날짜 스크랩 (직접 호출용) |
-| `FacultyScrapingFunction` | `scrape_faculty` | 교직원식당 단일 날짜 스크랩 (직접 호출용) |
-| `DormitoryScrapingFunction` | `scrape_dormitory` | 기숙사식당 주간 스크랩 (직접 호출용) |
-| `DodamSchedulingFunction` | `schedule_dodam` | 도담식당 주간 스케줄 |
-| `HaksikSchedulingFunction` | `schedule_haksik` | 학생식당 주간 스케줄 |
-| `FacultySchedulingFunction` | `schedule_faculty` | 교직원식당 주간 스케줄 |
-| `DormitorySchedulingFunction` | `schedule_dormitory` | 기숙사식당 주간 스케줄 (Step Functions 호출) |
-| `NotifyFailureFunction` | `notify_final_failure` | 식당별 최종 실패 Slack 알림 |
+Lambda는 `MenuFunction` 하나이며 이벤트로 동작을 정합니다.
 
-각 함수에 대응하는 CloudWatch 로그 그룹(`*LogGroup`)이 9개 추가로 존재하며, 로그는 30일간 보존됩니다.
-
-### 자동 스케줄
-
-- **도담/학생/교직원식당**: 매주 일요일 오후 4시 KST (UTC 07:00)에 다음 주 메뉴 실행
-- **기숙사식당**: 매주 월요일 오전 8시 KST (일요일 23:00 UTC)에 현재 주 메뉴 실행
-- 각 식당은 Step Functions를 통해 실행되며, 평일 복구 스케줄은 다음 날 메뉴 한 건만 다시 처리하고 성공 Slack 요약은 생략합니다.
-
-### 직접 호출 vs 스케줄 실행
-
-- **직접 호출(scrape_*)**: `is_dev=True` — dev Spring 클라이언트만 호출, dev 실패가 critical
-- **스케줄 실행(schedule_*)**: dev와 prod 모두 호출, prod 실패만 critical
-
-### Step Functions 재시도
-
-- **도메인 재시도** (`RetryableEmptyMenuError`, `RetryableApiSendError`, `RetryableMenuInterpretationError`): 최대 5회, 7200초 간격, 백오프 1.0
-- **Lambda 일시 오류 재시도** (`Lambda.ServiceException` 등): 최대 3회, 2초 간격, 백오프 2.0
-- 모든 재시도 소진 후 `NotifyFailureFunction`으로 최종 실패 알림
-- GPT 응답 계약 위반은 Lambda 내부에서 새 응답을 최대 3회 요청한 뒤 Step Functions 재시도로 승격합니다.
-- 검증 실패 로그에는 날짜, 슬롯, 허용된 사유 코드만 기록하며 메뉴 원문, 모델 응답, API 키는 기록하지 않습니다.
-- 상태머신 시작 시각을 날짜 기준점으로 전달하므로 자정을 넘겨 재시도해도 대상 주/날짜가 바뀌지 않습니다.
-- Spring은 동일 날짜·식당·시간대와 동일 메뉴 집합을 기존 식사로 재사용하므로 워크플로우 재실행을 중복 레코드 없이 처리합니다.
-
-### 최종 실패 알림
-
-`notify_final_failure`의 Slack 호출이 실패하면 예외가 그대로 전파됩니다. 보호할 Spring 쓰기가 없으므로 격리하지 않습니다. 최종 실패를 알린 상태머신 실행은 `FAILED`로 종료되어 식당별 CloudWatch Alarm에도 남습니다.
-
-## 환경 설정
-
-### 필요 조건
-
-- Python 3.11
-- AWS SAM CLI
-- AWS 계정 및 CLI 구성
-
-### AWS SAM 설정
-
-1. AWS SAM CLI 설치:
-
-**macOS (Homebrew):**
-```bash
-brew install aws-sam-cli
-```
-
-**Linux/Windows:** [AWS SAM CLI 설치 가이드](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-install.html) 참조
-
-2. AWS CLI 설정:
-```bash
-aws configure
-```
-
-## 배포 방법
-
-### 1. 환경 설정 파일 준비
-
-`env.json` 파일 생성 (루트 디렉토리):
 ```json
 {
-  "Parameters": {
-    "GPTApiKey": "your-openai-api-key",
-    "SlackWebhookUrl": "your-slack-webhook-url",
-    "ApiBaseUrl": "your-production-api-url",
-    "DevApiBaseUrl": "your-development-api-url"
-  }
+  "restaurant": "DORMITORY|HAKSIK|DODAM|FACULTY",
+  "dates": "current_week|next_week|remaining_week",
+  "date": "YYYYMMDD",
+  "mode": "fill|force",
+  "final": false,
+  "dry_run": false,
+  "environments": ["dev", "prod"]
 }
 ```
 
-### 2. 배포 설정 파일
+- `dates`와 `date` 중 하나를 넘깁니다. 오늘(KST) 이전 날짜는 항상 제외합니다.
+- `mode` 기본값은 `fill`입니다. `force`는 모든 코너를 다시 해석합니다(수동 복구용).
+- `environments` 기본값은 `["dev"]`입니다. 스케줄은 `["dev","prod"]`를 넘깁니다.
+- `final: true`이면 아직 prod에 없는 코너를 Slack으로 경고합니다.
+- `dry_run: true`이면 PUT과 Slack 없이 올릴 내용을 응답 본문 `planned`에 돌려줍니다.
 
-`samconfig.toml` 파일 생성 (루트 디렉토리):
-```toml
-version = 0.1
-[default]
-[default.deploy]
-[default.deploy.parameters]
-stack_name = "food-scrapper-default"
-region = "ap-northeast-2"
-confirm_changeset = true
-capabilities = "CAPABILITY_IAM"
-parameter_overrides = [
-    "GPTApiKey=your-gpt-api-key",
-    "SlackWebhookUrl=your-slack-webhook-url",
-    "ApiBaseUrl=your-api-base-url",
-    "DevApiBaseUrl=your-dev-api-base-url"
-]
-```
+### Slack 알림
 
-> ⚠️ **보안 주의사항**: `samconfig.toml`에는 민감한 정보가 포함되므로 `.gitignore`에 추가하세요.
+- 성공 요약: PUT으로 식단을 생성하거나 삭제한 날짜
+- 리뷰 경고: 리뷰 때문에 Spring이 유지한 식단(`keptWithReviews`)
+- 마감 경고: `final: true` 실행에서 발행되지 않은 코너(날짜, 시간대, 코너, 환경)
 
-### 3. 빌드 및 배포
+원본을 읽지 못한 경우(기숙사 미게시, 차단 페이지, HTTP 오류)에는 PUT하지 않습니다. 이때는 코너 수를 알 수 없으므로 prod에 해당 날짜와 시간대 식단이 1건 이상 있으면 발행된 것으로 봅니다.
 
-#### 기존 Lambda 로그 그룹 사전 확인
+## 스케줄 (KST, `ScheduleExpressionTimezone: Asia/Seoul`)
 
-이 템플릿은 9개 Lambda 함수의 `/aws/lambda/...` 로그 그룹을 CloudFormation 리소스로 관리하고 로그를 30일간 보존합니다. 기존 배포에서 같은 이름의 로그 그룹이 이미 자동 생성되었다면, **배포 전에 CloudFormation IMPORT change set**으로 9개 로그 그룹을 현재 스택 소유로 가져와야 합니다.
+| 식당 | 시각 | 대상 | final |
+|------|------|------|-------|
+| 기숙사 | 매일 08:00, 09:00 | 이번 주 | false |
+| 기숙사 | 매일 10:00 | 이번 주 | true |
+| 학생식당, 도담, 교직원식당 | 일요일 16:00 | 다음 주 | false |
+| 학생식당, 도담, 교직원식당 | 일요일 20:00 | 다음 주 | true |
+| 학생식당, 도담, 교직원식당 | 월-목 16:05 | 이번 주 남은 날짜 | true |
 
-기존 로그 그룹의 import가 완료되지 않았거나 import를 수행할 IAM 권한이 없다면, 같은 이름의 리소스를 생성하려 하지 말고 **배포를 중단**해야 합니다. 기존 로그 그룹을 삭제해서 충돌을 해결하지 마세요.
+## 기숙사 릴레이
 
-```bash
-# 애플리케이션 빌드
-sam build
+기숙사 사이트는 2026-10-28부터 데이터센터 IP에 호스팅 점검 페이지(HTTP 200, 제목 `솔루션의 강국`)를 반환합니다. 이 페이지는 `SOURCE_BLOCKED`로 분류합니다.
+`DormitoryRelayUrl` 파라미터를 설정하면 Lambda는 `{relay}?gyear=..&gmonth=..&gday=..`로 요청하고 `X-Relay-Token` 헤더에 `DormitoryRelayToken`을 넣습니다. 릴레이는 기숙사 페이지 바이트(EUC-KR)를 그대로 돌려줘야 합니다.
 
-# 템플릿 검증
-sam validate
+## 인프라 (`template.yml`)
 
-# 초회 배포 (가이드 모드)
-sam deploy --guided
+- `MenuFunction`: Lambda 하나, `CodeUri: src/`(런타임 코드만 포함)
+- `PythonRequirementsLayer`: `ContentUri: layer/`(`layer/requirements.txt`만 포함)
+- `MenuFunctionLogGroup`: 로그 30일 보존
+- 파라미터: `GPTApiKey`, `SlackWebhookUrl`, `ApiBaseUrl`, `DevApiBaseUrl`, `DormitoryRelayUrl`, `DormitoryRelayToken`
 
-# 이후 배포
-sam deploy
-```
-
-### 4. 로컬 개발 및 테스트
-
-```bash
-# 특정 함수 로컬 실행
-sam local invoke HaksikSchedulingFunction --event event.json --env-vars env.json
-
-# 로그 확인
-sam logs --stack-name food-scrapper-default --tail
-```
-
-### 5. 배포된 함수 수동 실행
-
-공개 HTTP 엔드포인트는 생성하지 않습니다. 수동 작업은 `lambda:InvokeFunction` 권한이 있는 IAM 자격 증명으로 AWS CLI의 `aws lambda invoke`를 사용합니다.
-
-```bash
-# 스택에서 실제 함수 이름을 확인한 뒤 IAM 인증으로 호출
-aws lambda invoke \
-  --function-name <stack-function-name> \
-  --cli-binary-format raw-in-base64-out \
-  --payload file://event.json \
-  response.json
-```
-
-호출 대상은 배포된 `DodamScrapingFunction`, `HaksikScrapingFunction`, `FacultyScrapingFunction`, `DormitoryScrapingFunction`, `DodamSchedulingFunction`, `HaksikSchedulingFunction`, `FacultySchedulingFunction`, `DormitorySchedulingFunction`, `NotifyFailureFunction`의 실제 함수 이름 중에서 선택합니다. IAM 자격 증명은 `aws configure` 또는 승인된 프로파일로 설정하고 공개 URL이나 익명 호출을 사용하지 않습니다.
+SAM은 `.samignore`를 따르지 않으므로 `env.json`, `.env`, `tests/` 등이 패키지에 들어가지 않도록 코드 디렉터리를 분리했습니다.
 
 ## 로컬 검증
 
 ```bash
-# 전체 오프라인 테스트 (CI와 동일한 명령)
 uv run pytest -q
-
-# 컴파일 검사
-uv run python -m compileall -q functions tests
-
-# SAM 템플릿 검증
 sam validate --lint
-
-# SAM 빌드
-sam build --no-cached
+make build   # layer/requirements.txt 생성, rm -rf .aws-sam, sam build --no-cached
+find .aws-sam/build/MenuFunction -maxdepth 1   # functions만 있어야 합니다
 ```
+
+## 배포
+
+`food-scrapper` 스택 배포는 곧 prod 반영입니다. 사용자 승인 후에만 실행합니다.
+
+```bash
+# 비밀 값은 macOS 키체인(account eatssu)에 저장합니다.
+security add-generic-password -U -a eatssu -s food-scrapper-gpt-api-key -w
+security add-generic-password -U -a eatssu -s food-scrapper-slack-webhook -w
+security add-generic-password -U -a eatssu -s food-scrapper-dorm-relay-token -w
+
+# 일반 값은 환경 변수로 넘깁니다. 없는 값은 이전 스택 값을 유지합니다.
+API_BASE_URL=https://eat-ssu.tech DEV_API_BASE_URL=https://dev.eat-ssu.tech \
+DORMITORY_RELAY_URL=https://relay.example/dorm make deploy
+```
+
+`deploy.sh`는 `env.json`과 `.env`를 읽지 않고, 비밀 값을 출력하지 않습니다.
+
+## 수동 실행
+
+```bash
+aws lambda invoke --function-name <MenuFunction 실제 이름> \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"restaurant":"HAKSIK","date":"20261102","dry_run":true,"environments":["dev","prod"]}' \
+  response.json
+```
+
+prod에 쓰는 수동 실행은 dry-run 결과를 확인하고 승인받은 뒤에만 합니다.

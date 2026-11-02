@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -12,6 +14,8 @@ from bs4 import BeautifulSoup, Tag
 
 SOONGGURI_BASE_URL = "http://m.soongguri.com/m_req/m_menu.php"
 DORMITORY_BASE_URL = "https://ssudorm.ssu.ac.kr:444/SShostel/mall_main.php"
+
+logger = logging.getLogger(__name__)
 
 SOONGGURI_RESTAURANTS: Mapping[str, int] = {
     "HAKSIK": 1,
@@ -37,6 +41,9 @@ _CLOSURE_MARKERS = frozenset(
 _ENGLISH_PHRASE = re.compile(
     r"(?<![A-Za-z])(?:[A-Za-z][A-Za-z'’-]*)(?:[ \t]+[A-Za-z][A-Za-z'’-]*)*"
 )
+# Hosting maintenance page served to datacenter IPs instead of the menu.
+_MAINTENANCE_MARKERS = ("업데이트 준비중", "솔루션의 강국", "/images/error/not-found.gif")
+_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _DORMITORY_WEEKEND_CLOSURE = re.compile(
     r"주말에는\s*식당\s*운영을\s*하지\s*않습니다"
 )
@@ -368,6 +375,8 @@ def parse_dormitory_html(
 ) -> list[MealRecord]:
     ordered_dates, requested = _requested_date_map(requested_dates)
     error_date = ordered_dates[0]
+    if any(marker in html_content for marker in _MAINTENANCE_MARKERS):
+        raise SourceParseError(error_date, "DORMITORY", "SOURCE_BLOCKED")
     soup = BeautifulSoup(html_content, "html.parser")
     reopening = _dormitory_weekend_reopening(soup, ordered_dates)
     announced_closures = _dormitory_announced_closures(soup, ordered_dates)
@@ -509,6 +518,11 @@ PARSERS: Mapping[str, Callable[..., list[MealRecord]]] = {
 }
 
 
+def _page_title(html_content: str) -> str:
+    match = _TITLE.search(html_content)
+    return _normalized_text(match.group(1))[:80] if match else ""
+
+
 async def fetch_meals(
     restaurant: object,
     date: str,
@@ -521,6 +535,8 @@ async def fetch_meals(
     name = _restaurant_name(restaurant)
     dates = tuple(requested_dates) if requested_dates is not None else (date,)
     make_session = session_factory or aiohttp.ClientSession
+    relay_url = os.getenv("DORMITORY_RELAY_URL", "") if name == "DORMITORY" else ""
+    status: int | None = None
 
     try:
         async with make_session() as session:
@@ -528,29 +544,53 @@ async def fetch_meals(
                 date_value = datetime.strptime(date, "%Y%m%d")
                 # The source returns the following week when gday is a Sunday.
                 week_monday = date_value - timedelta(days=date_value.weekday())
-                params = {
-                    "viewform": "B0001_foodboard_list",
+                week = {
                     "gyear": week_monday.year,
                     "gmonth": week_monday.month,
                     "gday": week_monday.day,
                 }
-                request = session.get(dormitory_base_url, params=params)
+                if relay_url:
+                    token = os.getenv("DORMITORY_RELAY_TOKEN", "")
+                    headers = {"X-Relay-Token": token} if token else {}
+                    request = session.get(relay_url, params=week, headers=headers)
+                else:
+                    params = {"viewform": "B0001_foodboard_list", **week}
+                    request = session.get(dormitory_base_url, params=params)
             else:
                 url = f"{soongguri_base_url}?rcd={SOONGGURI_RESTAURANTS[name]}&sdt={date}"
                 request = session.get(url)
             async with request as response:
                 _ = response.raise_for_status()
-                html_content = await response.text()
+                status = getattr(response, "status", None)
+                if relay_url:
+                    # The relay forwards the dormitory bytes unchanged (EUC-KR).
+                    body = await response.read()
+                    html_content = body.decode(
+                        getattr(response, "charset", None) or "cp949", errors="replace"
+                    )
+                else:
+                    html_content = await response.text()
     except Exception as error:
         status_value = getattr(error, "status", None)
-        status = status_value if isinstance(status_value, int) else None
         raise ScraperError(
             date,
             name,
             "SOURCE_HTTP_ERROR",
             API_FAILURE,
             error_type=type(error).__name__,
-            status=status,
+            status=status_value if isinstance(status_value, int) else None,
         ) from None
 
-    return parse_menu_html(html_content, name, dates)
+    try:
+        return parse_menu_html(html_content, name, dates)
+    except SourceParseError as error:
+        logger.warning(
+            "source parse failed restaurant=%s date=%s reason=%s status=%s bytes=%d title=%s",
+            name,
+            date,
+            error.reason_code,
+            status,
+            len(html_content.encode("utf-8")),
+            _page_title(html_content),
+        )
+        raise
